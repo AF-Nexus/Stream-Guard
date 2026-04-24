@@ -3,34 +3,432 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Channelzz API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: channels
+  - name: categories
+  - name: announcements
+  - name: settings
+  - name: admin
+  - name: stream
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
-      summary: Health check
-      description: Returns server health status
       responses:
         "200":
-          description: Healthy
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      responses:
+        "200":
+          description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
+                type: array
+                items: { $ref: "#/components/schemas/Category" }
+    post:
+      operationId: createCategory
+      tags: [categories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CategoryInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+  /categories/{id}:
+    delete:
+      operationId: deleteCategory
+      tags: [categories]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /channels:
+    get:
+      operationId: listChannels
+      tags: [channels]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Channel" }
+    post:
+      operationId: createChannel
+      tags: [channels]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChannelInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Channel" }
+  /channels/{id}:
+    get:
+      operationId: getChannel
+      tags: [channels]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Channel" }
+    patch:
+      operationId: updateChannel
+      tags: [channels]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChannelInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Channel" }
+    delete:
+      operationId: deleteChannel
+      tags: [channels]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /channels/{id}/play:
+    post:
+      operationId: requestPlayToken
+      tags: [stream]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlayTicket" }
+
+  /announcements:
+    get:
+      operationId: listAnnouncements
+      tags: [announcements]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Announcement" }
+    post:
+      operationId: createAnnouncement
+      tags: [announcements]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+  /announcements/{id}:
+    delete:
+      operationId: deleteAnnouncement
+      tags: [announcements]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminUser" }
+  /admin/users/{id}:
+    patch:
+      operationId: updateUserAccess
+      tags: [admin]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserAccessInput" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUser" }
+
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminStats" }
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
-        status:
+        status: { type: string }
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+    Me:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated: { type: boolean }
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        avatarUrl: { type: string }
+        role: { type: string, enum: [admin, user] }
+        access:
           type: string
-      required:
-        - status
+          enum: [trial, paid, expired, banned]
+        trialEndsAt: { type: string, format: date-time, nullable: true }
+        subscriptionEndsAt: { type: string, format: date-time, nullable: true }
+        banned: { type: boolean }
 
+    Category:
+      type: object
+      required: [id, name, slug, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        createdAt: { type: string, format: date-time }
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+
+    Channel:
+      type: object
+      required: [id, name, categoryId, logoUrl, isLive, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        categoryId: { type: string }
+        categoryName: { type: string }
+        logoUrl: { type: string }
+        isLive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    ChannelInput:
+      type: object
+      required: [name, categoryId, logoUrl, sourceUrl]
+      properties:
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        categoryId: { type: string }
+        logoUrl: { type: string }
+        sourceUrl: { type: string, description: "m3u8 origin URL — never returned to clients" }
+        isLive: { type: boolean }
+
+    PlayTicket:
+      type: object
+      required: [playlistUrl, expiresAt]
+      properties:
+        playlistUrl: { type: string }
+        expiresAt: { type: string, format: date-time }
+
+    Announcement:
+      type: object
+      required: [id, title, body, createdAt, expiresAt]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    AnnouncementInput:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string, minLength: 1 }
+        body: { type: string, minLength: 1 }
+
+    Settings:
+      type: object
+      required: [pricingText, whatsappNumber, trialHours]
+      properties:
+        pricingText: { type: string }
+        whatsappNumber: { type: string }
+        trialHours: { type: integer }
+    SettingsInput:
+      type: object
+      required: [pricingText, whatsappNumber, trialHours]
+      properties:
+        pricingText: { type: string }
+        whatsappNumber: { type: string }
+        trialHours: { type: integer, minimum: 0 }
+
+    AdminUser:
+      type: object
+      required: [id, email, role, access, banned, createdAt, lastSeenAt]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [admin, user] }
+        access: { type: string, enum: [trial, paid, expired, banned] }
+        banned: { type: boolean }
+        trialEndsAt: { type: string, format: date-time, nullable: true }
+        subscriptionEndsAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        lastUserAgent: { type: string, nullable: true }
+        sessionsCount: { type: integer }
+    UserAccessInput:
+      type: object
+      properties:
+        addDays: { type: integer, description: "Add days to subscription" }
+        setSubscriptionEndsAt: { type: string, format: date-time, nullable: true }
+        banned: { type: boolean }
+
+    AdminStats:
+      type: object
+      required: [totalUsers, activeUsers, paidUsers, trialUsers, bannedUsers, totalChannels, totalCategories, recentSignups]
+      properties:
+        totalUsers: { type: integer }
+        activeUsers: { type: integer }
+        paidUsers: { type: integer }
+        trialUsers: { type: integer }
+        bannedUsers: { type: integer }
+        totalChannels: { type: integer }
+        totalCategories: { type: integer }
+        recentSignups:
+          type: array
+          items:
+            type: object
+            required: [id, email, createdAt]
+            properties:
+              id: { type: string }
+              email: { type: string }
+              name: { type: string, nullable: true }
+              createdAt: { type: string, format: date-time }

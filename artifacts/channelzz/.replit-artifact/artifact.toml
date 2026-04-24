@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Channelzz"
+version = "1.0.0"
+id = "artifacts/channelzz"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21954
+
+[services.development]
+run = "pnpm --filter @workspace/channelzz run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/channelzz", "run", "build" ]
+publicDir = "artifacts/channelzz/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21954"
+BASE_PATH = "/"
