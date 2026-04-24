@@ -54,9 +54,33 @@ async function ensureUserRow(clerkUserId: string, req: Request) {
       .returning();
     return row;
   } else {
+    // Re-check Clerk email so admin promotion / email sync works even if the
+    // row was created before the user verified their email or signed in via
+    // a different provider.
+    let freshEmail = existing[0]!.email;
+    let freshName = existing[0]!.name;
+    let freshAvatar = existing[0]!.avatarUrl;
+    try {
+      const u = await clerkClient.users.getUser(clerkUserId);
+      const e = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress ?? "";
+      if (e) freshEmail = e;
+      const n = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || null;
+      if (n) freshName = n;
+      if (u.imageUrl) freshAvatar = u.imageUrl;
+    } catch {
+      // ignore
+    }
+
+    const shouldBeAdmin = freshEmail.toLowerCase() === ADMIN_EMAIL;
+    const newRole = shouldBeAdmin ? "admin" : existing[0]!.role;
+
     const [row] = await db
       .update(usersTable)
       .set({
+        email: freshEmail,
+        name: freshName,
+        avatarUrl: freshAvatar,
+        role: newRole,
         lastSeenAt: new Date(),
         lastUserAgent: ua,
         sessionsCount: (existing[0]!.sessionsCount ?? 0) + 1,
