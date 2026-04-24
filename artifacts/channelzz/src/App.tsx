@@ -13,6 +13,7 @@ import Home from "@/pages/home";
 import Watch from "@/pages/watch";
 import Player from "@/pages/player";
 import NotFound from "@/pages/not-found";
+import Admin from "@/pages/admin";
 
 const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
@@ -179,7 +180,7 @@ function AdminPortal() {
     <>
       <Show when="signed-in">
         <Layout>
-          <div className="container py-8 text-center text-muted-foreground">Admin Portal (To Be Implemented)</div>
+          <Admin />
         </Layout>
       </Show>
       <Show when="signed-out">
