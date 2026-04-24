@@ -1,35 +1,40 @@
 # Channelzz
 
-A live TV streaming platform.
+A self-contained live TV streaming platform with email/password auth and a built-in admin portal. No third-party services required.
 
 ## Features
 
-- Google sign-in (Clerk)
-- Dark/Light theme switcher
+- Email + password sign-up / sign-in (no SaaS dependency)
+- The first user to sign up with `efkidgamer@gmail.com` is automatically promoted to admin
+- Dark / light theme switcher
 - Admin portal: manage channels (m3u8), categories, users, subscriptions, announcements (auto-expire after 24h), pricing
-- 4-hour free trial for new users (configurable)
-- Subscription days, ban users, real-time tracking with user-agent
-- Stream proxy: m3u8 origin URLs are NEVER exposed to the browser. Every request is signed with a short-lived JWT and proxied through the backend.
-- WhatsApp upgrade flow
+- 4-hour free trial for new users (configurable in admin settings)
+- Subscription days, ban users, real-time tracking with user-agent and session count
+- **Stream proxy**: m3u8 origin URLs are NEVER exposed to the browser. Every request is signed with a short-lived JWT and proxied through the backend
+- WhatsApp upgrade flow (number editable in admin settings)
 
-## Local Development (VS Code)
+## Tech Stack
+
+- **Backend:** Node 20 / Express 5 / better-sqlite3 / Drizzle ORM
+- **Frontend:** React + Vite + Tailwind + shadcn/ui + wouter + TanStack Query
+- **Auth:** bcryptjs + JWT in an httpOnly cookie
+- **Database:** SQLite (single file). Tables are created automatically on first boot.
+
+## Local development
 
 ### Prerequisites
 
 - Node.js 20 or 24
 - pnpm 10 (`npm install -g pnpm`)
-- A PostgreSQL database (local or hosted — Neon, Supabase, Render Postgres, etc.)
-- A Clerk account (free tier is fine) with Google enabled as a social provider
 
-### Environment variables (create a `.env` file in the project root or export in your shell)
+### Environment variables
+
+Create a `.env` file in the project root, or export in your shell:
 
 ```
-DATABASE_URL=postgresql://user:pass@host:5432/channelzz
-CLERK_SECRET_KEY=sk_test_...
-CLERK_PUBLISHABLE_KEY=pk_test_...
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 SESSION_SECRET=any-long-random-string
 STREAM_SECRET=another-long-random-string
+DATABASE_PATH=./data/channelzz.db   # optional, default shown
 PORT=8080
 BASE_PATH=/
 ```
@@ -38,8 +43,7 @@ BASE_PATH=/
 
 ```bash
 pnpm install
-pnpm --filter @workspace/db run push           # create tables
-pnpm --filter @workspace/api-spec run codegen  # generate API client/zod
+pnpm --filter @workspace/api-spec run codegen
 # Run API (terminal 1)
 PORT=8080 pnpm --filter @workspace/api-server run dev
 # Run web (terminal 2)
@@ -48,14 +52,11 @@ PORT=5173 BASE_PATH=/ pnpm --filter @workspace/channelzz run dev
 
 Then open http://localhost:5173 .
 
-> The web dev server expects to call `/api/*` on the same origin. For local dev, add a Vite proxy or run both behind a reverse proxy. Easiest is to set `VITE_API_BASE=http://localhost:8080` and adapt the fetch base in `lib/api-client-react/src/custom-fetch.ts` (or simply deploy — production handles routing automatically).
-
 ### Build for production
 
 ```bash
 pnpm install
 pnpm --filter @workspace/api-spec run codegen
-pnpm --filter @workspace/db run push
 pnpm run build
 ```
 
@@ -65,40 +66,48 @@ Then start with:
 PORT=8080 pnpm --filter @workspace/api-server run start
 ```
 
-The frontend builds to `artifacts/channelzz/dist/public/`. You can serve it from the same Express server (recommended in production) or from a CDN.
+The frontend builds to `artifacts/channelzz/dist/public/`.
 
-## Deploy on Render
+## Deploy on Render (recommended)
 
-Create a **Web Service**:
+The API server and the SQLite file should live on a service with a **persistent disk**, otherwise your data will be wiped on every redeploy.
 
-- **Build command:**
-  ```
-  npm install -g pnpm@10 && pnpm install && pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/db run push && pnpm run build
-  ```
-- **Start command:**
-  ```
-  pnpm --filter @workspace/api-server run start
-  ```
-- **Environment variables:** all of the ones listed above. Use Render's managed Postgres for `DATABASE_URL`.
+1. Create a **Web Service** from this repo.
+2. **Build command:**
+   ```
+   npm install -g pnpm@10 && pnpm install && pnpm --filter @workspace/api-spec run codegen && pnpm run build
+   ```
+3. **Start command:**
+   ```
+   pnpm --filter @workspace/api-server run start
+   ```
+4. **Environment variables:**
+   - `SESSION_SECRET` — long random string
+   - `STREAM_SECRET` — long random string
+   - `DATABASE_PATH=/var/data/channelzz.db`
+   - `NODE_ENV=production`
+5. Add a **Disk**:
+   - Mount path: `/var/data`
+   - Size: 1 GB is more than enough.
 
-You'll also want a separate **Static Site** service for `artifacts/channelzz/dist/public/` if you want the frontend hosted on the CDN edge. In that case set the `/api` route to rewrite to the Web Service. Easier path: serve both from the Web Service (add a static-file middleware in `app.ts`).
+That's it — no external database, no third-party auth provider, nothing else to configure. The first time you visit the app, sign up with `efkidgamer@gmail.com` and you'll be promoted to admin automatically.
 
-## Deploy on Vercel
+If you want to host the static frontend on a CDN separately (Vercel/Netlify), build it with:
 
-Vercel works best for the frontend. Use:
+```
+pnpm install && pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/channelzz run build
+```
 
-- **Root directory:** project root
-- **Build command:**
-  ```
-  npm install -g pnpm@10 && pnpm install && pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/channelzz run build
-  ```
-- **Output directory:** `artifacts/channelzz/dist/public`
-
-Deploy the API separately on Render / Fly / Railway and set `VITE_API_BASE` accordingly.
+…and serve `artifacts/channelzz/dist/public/`. You'll need to set `VITE_API_BASE` (or proxy `/api/*` to your Render API service) so the frontend talks to the right backend.
 
 ## Admin
 
-The first user to sign in with `efkidgamer@gmail.com` is automatically promoted to admin and can access `/admin`.
+After deploying:
+
+1. Go to the app and click **Sign in → Create one**.
+2. Sign up with `efkidgamer@gmail.com`. You'll land on `/admin` automatically.
+3. Add categories, then add channels (paste your m3u8 source URL — it will be kept secret server-side and proxied through `/api/stream/...`).
+4. Tweak pricing text, WhatsApp number, and trial hours from the **Settings** tab.
 
 ---
 

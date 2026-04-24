@@ -1,112 +1,85 @@
-import { getAuth, clerkClient } from "@clerk/express";
 import type { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
 import { db, usersTable, settingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
-const ADMIN_EMAIL = "efkidgamer@gmail.com";
+export const ADMIN_EMAIL = "efkidgamer@gmail.com";
+const COOKIE_NAME = "channelzz_session";
+const SESSION_TTL_DAYS = 30;
+
+function getSecret(): string {
+  const s = process.env.SESSION_SECRET;
+  if (!s) throw new Error("SESSION_SECRET is required");
+  return s;
+}
 
 export interface AuthedRequest extends Request {
   userId?: string;
   userRow?: typeof usersTable.$inferSelect;
 }
 
-async function ensureUserRow(clerkUserId: string, req: Request) {
-  const existing = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.id, clerkUserId))
-    .limit(1);
+export function issueSessionCookie(res: Response, userId: string) {
+  const token = jwt.sign({ uid: userId }, getSecret(), { expiresIn: `${SESSION_TTL_DAYS}d` });
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: SESSION_TTL_DAYS * 86400 * 1000,
+    path: "/",
+  });
+}
 
-  const ua = (req.headers["user-agent"] as string | undefined) ?? null;
+export function clearSessionCookie(res: Response) {
+  res.clearCookie(COOKIE_NAME, { path: "/" });
+}
 
-  if (existing.length === 0) {
-    let email = "";
-    let name: string | null = null;
-    let avatarUrl: string | null = null;
-    try {
-      const u = await clerkClient.users.getUser(clerkUserId);
-      email = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress ?? "";
-      name = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || null;
-      avatarUrl = u.imageUrl ?? null;
-    } catch {
-      // ignore
-    }
-
-    const role = email.toLowerCase() === ADMIN_EMAIL ? "admin" : "user";
-    const settingsRows = await db.select().from(settingsTable).limit(1);
-    const trialHours = settingsRows[0]?.trialHours ?? 4;
-
-    const trialEndsAt = new Date(Date.now() + trialHours * 3600 * 1000);
-
-    const [row] = await db
-      .insert(usersTable)
-      .values({
-        id: clerkUserId,
-        email: email || `${clerkUserId}@unknown.local`,
-        name,
-        avatarUrl,
-        role,
-        trialEndsAt: role === "admin" ? null : trialEndsAt,
-        lastSeenAt: new Date(),
-        lastUserAgent: ua,
-        sessionsCount: 1,
-      })
-      .returning();
-    return row;
-  } else {
-    // Re-check Clerk email so admin promotion / email sync works even if the
-    // row was created before the user verified their email or signed in via
-    // a different provider.
-    let freshEmail = existing[0]!.email;
-    let freshName = existing[0]!.name;
-    let freshAvatar = existing[0]!.avatarUrl;
-    try {
-      const u = await clerkClient.users.getUser(clerkUserId);
-      const e = u.primaryEmailAddress?.emailAddress ?? u.emailAddresses[0]?.emailAddress ?? "";
-      if (e) freshEmail = e;
-      const n = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || null;
-      if (n) freshName = n;
-      if (u.imageUrl) freshAvatar = u.imageUrl;
-    } catch {
-      // ignore
-    }
-
-    const shouldBeAdmin = freshEmail.toLowerCase() === ADMIN_EMAIL;
-    const newRole = shouldBeAdmin ? "admin" : existing[0]!.role;
-
-    const [row] = await db
-      .update(usersTable)
-      .set({
-        email: freshEmail,
-        name: freshName,
-        avatarUrl: freshAvatar,
-        role: newRole,
-        lastSeenAt: new Date(),
-        lastUserAgent: ua,
-        sessionsCount: (existing[0]!.sessionsCount ?? 0) + 1,
-      })
-      .where(eq(usersTable.id, clerkUserId))
-      .returning();
-    return row;
+export function readSessionUserId(req: Request): string | null {
+  const token = (req as Request & { cookies?: Record<string, string> }).cookies?.[COOKIE_NAME];
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, getSecret()) as { uid?: string };
+    return decoded.uid ?? null;
+  } catch {
+    return null;
   }
 }
 
+export async function bumpSession(userId: string, req: Request) {
+  const ua = (req.headers["user-agent"] as string | undefined) ?? null;
+  const [existing] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  if (!existing) return null;
+  const [row] = await db
+    .update(usersTable)
+    .set({
+      lastSeenAt: new Date(),
+      lastUserAgent: ua,
+      sessionsCount: (existing.sessionsCount ?? 0) + 1,
+    })
+    .where(eq(usersTable.id, userId))
+    .returning();
+  return row ?? existing;
+}
+
+export async function loadUser(userId: string) {
+  const [row] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  return row ?? null;
+}
+
 export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const auth = getAuth(req);
-  const userId = (auth?.sessionClaims as { userId?: string } | undefined)?.userId || auth?.userId;
+  const userId = readSessionUserId(req);
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  try {
-    const row = await ensureUserRow(userId, req);
-    req.userId = userId;
-    req.userRow = row ?? undefined;
-    next();
-  } catch (err) {
-    req.log?.error({ err }, "ensureUserRow failed");
-    res.status(500).json({ error: "Auth bootstrap failed" });
+  const row = await loadUser(userId);
+  if (!row) {
+    clearSessionCookie(res);
+    res.status(401).json({ error: "Unauthorized" });
+    return;
   }
+  req.userId = userId;
+  req.userRow = row;
+  next();
 }
 
 export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -129,4 +102,10 @@ export function userHasAccess(row: typeof usersTable.$inferSelect): boolean {
   if (row.role === "admin") return true;
   const s = userAccessStatus(row);
   return s === "trial" || s === "paid";
+}
+
+export async function getDefaultTrialMillis(): Promise<number> {
+  const [s] = await db.select().from(settingsTable).limit(1);
+  const hours = s?.trialHours ?? 4;
+  return hours * 3600 * 1000;
 }

@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, usersTable, categoriesTable, channelsTable, announcementsTable, settingsTable } from "@workspace/db";
-import { eq, desc, sql, and, gt } from "drizzle-orm";
+import { eq, desc, sql, and, gt, lt } from "drizzle-orm";
 import { requireAuth, requireAdmin, userAccessStatus, userHasAccess, type AuthedRequest } from "../lib/auth.js";
 import { signStreamToken } from "../lib/streamToken.js";
 import streamRouter from "./stream.js";
@@ -35,7 +35,7 @@ router.get("/categories", async (_req, res) => {
 
 router.get("/announcements", async (_req, res) => {
   // auto-cleanup expired
-  await db.delete(announcementsTable).where(sql`${announcementsTable.expiresAt} < now()`);
+  await db.delete(announcementsTable).where(lt(announcementsTable.expiresAt, new Date()));
   const rows = await db.select().from(announcementsTable).orderBy(desc(announcementsTable.createdAt));
   res.json(rows.map(r => ({
     id: r.id, title: r.title, body: r.body,
@@ -92,33 +92,6 @@ router.get("/channels/:id", async (req, res) => {
 });
 
 // --- Authenticated ---
-router.get("/me", async (req: AuthedRequest, res: Response) => {
-  // Use requireAuth-like flow but allow unauth
-  const { getAuth } = await import("@clerk/express");
-  const auth = getAuth(req);
-  const userId = (auth?.sessionClaims as { userId?: string } | undefined)?.userId || auth?.userId;
-  if (!userId) {
-    res.json({ authenticated: false });
-    return;
-  }
-  // run requireAuth's bootstrap
-  await new Promise<void>((resolve) => requireAuth(req, res as Response, resolve as () => void));
-  if (res.headersSent) return;
-  const row = req.userRow!;
-  res.json({
-    authenticated: true,
-    id: row.id,
-    email: row.email,
-    name: row.name ?? undefined,
-    avatarUrl: row.avatarUrl ?? undefined,
-    role: row.role,
-    access: userAccessStatus(row),
-    trialEndsAt: row.trialEndsAt ? row.trialEndsAt.toISOString() : null,
-    subscriptionEndsAt: row.subscriptionEndsAt ? row.subscriptionEndsAt.toISOString() : null,
-    banned: row.banned,
-  });
-});
-
 router.post("/channels/:id/play", requireAuth, async (req: AuthedRequest, res: Response) => {
   const id = String(req.params.id);
   const row = req.userRow!;
@@ -251,12 +224,12 @@ router.patch("/admin/users/:id", requireAuth, requireAdmin, async (req, res) => 
 });
 
 router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const totalUsersR = await db.select({ c: sql<number>`count(*)::int` }).from(usersTable);
-  const bannedR = await db.select({ c: sql<number>`count(*)::int` }).from(usersTable).where(eq(usersTable.banned, true));
-  const paidR = await db.select({ c: sql<number>`count(*)::int` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.subscriptionEndsAt, new Date())));
-  const trialR = await db.select({ c: sql<number>`count(*)::int` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.trialEndsAt, new Date())));
-  const channelsR = await db.select({ c: sql<number>`count(*)::int` }).from(channelsTable);
-  const catsR = await db.select({ c: sql<number>`count(*)::int` }).from(categoriesTable);
+  const totalUsersR = await db.select({ c: sql<number>`count(*)` }).from(usersTable);
+  const bannedR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(eq(usersTable.banned, true));
+  const paidR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.subscriptionEndsAt, new Date())));
+  const trialR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.trialEndsAt, new Date())));
+  const channelsR = await db.select({ c: sql<number>`count(*)` }).from(channelsTable);
+  const catsR = await db.select({ c: sql<number>`count(*)` }).from(categoriesTable);
   const recent = await db.select().from(usersTable).orderBy(desc(usersTable.createdAt)).limit(8);
   const totalUsers = totalUsersR[0]?.c ?? 0;
   const banned = bannedR[0]?.c ?? 0;

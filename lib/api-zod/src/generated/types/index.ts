@@ -13,6 +13,8 @@ export * from "./adminUserAccess";
 export * from "./adminUserRole";
 export * from "./announcement";
 export * from "./announcementInput";
+export * from "./authLoginInput";
+export * from "./authSignupInput";
 export * from "./category";
 export * from "./categoryInput";
 export * from "./channel";

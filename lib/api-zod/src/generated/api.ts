@@ -24,6 +24,49 @@ export const GetMeResponse = zod.object({
   banned: zod.boolean().optional(),
 });
 
+export const authSignupBodyPasswordMin = 6;
+
+export const AuthSignupBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string().min(authSignupBodyPasswordMin),
+  name: zod.string().optional(),
+});
+
+export const AuthSignupResponse = zod.object({
+  authenticated: zod.boolean(),
+  id: zod.string().optional(),
+  email: zod.string().optional(),
+  name: zod.string().optional(),
+  avatarUrl: zod.string().optional(),
+  role: zod.enum(["admin", "user"]).optional(),
+  access: zod.enum(["trial", "paid", "expired", "banned"]).optional(),
+  trialEndsAt: zod.coerce.date().nullish(),
+  subscriptionEndsAt: zod.coerce.date().nullish(),
+  banned: zod.boolean().optional(),
+});
+
+export const AuthLoginBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string(),
+});
+
+export const AuthLoginResponse = zod.object({
+  authenticated: zod.boolean(),
+  id: zod.string().optional(),
+  email: zod.string().optional(),
+  name: zod.string().optional(),
+  avatarUrl: zod.string().optional(),
+  role: zod.enum(["admin", "user"]).optional(),
+  access: zod.enum(["trial", "paid", "expired", "banned"]).optional(),
+  trialEndsAt: zod.coerce.date().nullish(),
+  subscriptionEndsAt: zod.coerce.date().nullish(),
+  banned: zod.boolean().optional(),
+});
+
+export const AuthLogoutResponse = zod.object({
+  ok: zod.boolean(),
+});
+
 export const ListCategoriesResponseItem = zod.object({
   id: zod.string(),
   name: zod.string(),

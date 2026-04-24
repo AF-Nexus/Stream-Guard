@@ -1,22 +1,29 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "./theme-provider";
-import { Moon, Sun, Tv, User as UserIcon, LogOut } from "lucide-react";
+import { Moon, Sun, Tv, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Show, useClerk } from "@clerk/react";
-import { useGetMe } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useGetMe, getGetMeQueryKey } from "@workspace/api-client-react";
+import { postJson } from "@/lib/auth-fetch";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { theme, setTheme } = useTheme();
-  const [location] = useLocation();
-  const { signOut } = useClerk();
+  const [location, setLocation] = useLocation();
   const { data: me } = useGetMe();
+  const queryClient = useQueryClient();
 
-  const toggleTheme = () => {
-    setTheme(theme === "dark" ? "light" : "dark");
-  };
-
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
   const isHome = location === "/";
+
+  async function handleSignOut() {
+    try { await postJson("/auth/logout"); } catch { /* ignore */ }
+    queryClient.setQueryData(getGetMeQueryKey(), { authenticated: false });
+    queryClient.clear();
+    setLocation("/");
+  }
+
+  const isAdmin = me?.authenticated && me.role === "admin";
 
   return (
     <div className="min-h-[100dvh] flex flex-col w-full selection:bg-primary/30">
@@ -35,27 +42,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full">
               {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
-            
-            <Show when="signed-out">
+
+            {!me?.authenticated && (
               <Link href="/sign-in" className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90">
                 Sign In
               </Link>
-            </Show>
-            
-            <Show when="signed-in">
-              {me?.email?.toLowerCase() === "efkidgamer@gmail.com" && (
-                <Link href="/admin" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
-                  Admin
+            )}
+
+            {me?.authenticated && (
+              <>
+                {isAdmin && (
+                  <Link href="/admin" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
+                    Admin
+                  </Link>
+                )}
+                <Link href="/watch" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
+                  Watch
                 </Link>
-              )}
-              <Link href="/watch" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
-                Watch
-              </Link>
-              <Button variant="outline" size="sm" onClick={() => signOut()} className="rounded-md gap-2">
-                <LogOut className="h-4 w-4" />
-                <span className="hidden sm:inline">Sign Out</span>
-              </Button>
-            </Show>
+                <Button variant="outline" size="sm" onClick={handleSignOut} className="rounded-md gap-2">
+                  <LogOut className="h-4 w-4" />
+                  <span className="hidden sm:inline">Sign Out</span>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>

@@ -42,6 +42,18 @@ export interface Me {
   banned?: boolean;
 }
 
+export interface AuthSignupInput {
+  email: string;
+  /** @minLength 6 */
+  password: string;
+  name?: string;
+}
+
+export interface AuthLoginInput {
+  email: string;
+  password: string;
+}
+
 export interface Category {
   id: string;
   name: string;
