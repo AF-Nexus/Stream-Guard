@@ -12,7 +12,7 @@ export default function Home() {
   return (
     <div className="flex flex-col min-h-[100dvh]">
       {/* Hero Section */}
-      <section className="relative w-full h-[80vh] min-h-[600px] flex items-center justify-center overflow-hidden bg-black">
+      <section className="relative w-full min-h-[70vh] sm:min-h-[80vh] sm:h-[80vh] py-12 sm:py-0 flex items-center justify-center overflow-hidden bg-black">
         <div className="absolute inset-0 z-0">
           <img 
             src="/hero-bg.png" 
@@ -29,10 +29,10 @@ export default function Home() {
               <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse"></span>
               Live TV Streaming
             </div>
-            <h1 className="text-5xl md:text-7xl font-black tracking-tight text-white italic drop-shadow-lg">
+            <h1 className="text-4xl sm:text-5xl md:text-7xl font-black tracking-tight text-white italic drop-shadow-lg">
               Unlimited <span className="text-primary">Entertainment</span> Without Borders
             </h1>
-            <p className="text-xl text-gray-300 md:text-2xl max-w-[600px] font-medium drop-shadow-md">
+            <p className="text-base sm:text-xl text-gray-300 md:text-2xl max-w-[600px] font-medium drop-shadow-md">
               Stream live sports, breaking news, blockbuster movies, and more. Premium quality straight to your device.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 pt-4">

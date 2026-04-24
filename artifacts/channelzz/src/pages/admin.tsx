@@ -55,7 +55,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="container py-8 max-w-7xl">
+    <div className="container py-6 sm:py-8 px-3 sm:px-6 max-w-7xl">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Admin Portal</h1>
       </div>
@@ -153,7 +153,7 @@ function DashboardTab() {
           <CardTitle>Recent Signups</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
+          <div className="overflow-x-auto"><Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Email</TableHead>
@@ -170,7 +170,7 @@ function DashboardTab() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></div>
         </CardContent>
       </Card>
     </div>
@@ -332,7 +332,7 @@ function ChannelsTab() {
         </Dialog>
       </CardHeader>
       <CardContent>
-        <Table>
+        <div className="overflow-x-auto"><Table>
           <TableHeader>
             <TableRow>
               <TableHead>Logo</TableHead>
@@ -375,7 +375,7 @@ function ChannelsTab() {
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table></div>
       </CardContent>
     </Card>
   );
@@ -486,7 +486,7 @@ function UsersTab() {
       </CardHeader>
       <CardContent>
         <div className="rounded-md border">
-          <Table>
+          <div className="overflow-x-auto"><Table>
             <TableHeader>
               <TableRow>
                 <TableHead>User</TableHead>
@@ -529,7 +529,7 @@ function UsersTab() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></div>
         </div>
       </CardContent>
     </Card>

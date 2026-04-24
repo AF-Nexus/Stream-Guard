@@ -149,8 +149,8 @@ export default function Player() {
         )}
       </div>
 
-      <div className="bg-card border border-border p-6 rounded-xl flex items-start gap-6">
-        <div className="h-20 w-20 bg-black/20 rounded-lg flex items-center justify-center shrink-0 border border-border/50 p-2 overflow-hidden">
+      <div className="bg-card border border-border p-4 sm:p-6 rounded-xl flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
+        <div className="h-16 w-16 sm:h-20 sm:w-20 bg-black/20 rounded-lg flex items-center justify-center shrink-0 border border-border/50 p-2 overflow-hidden">
           {channel.logoUrl ? (
             <img src={channel.logoUrl} alt={channel.name} className="max-w-full max-h-full object-contain" />
           ) : (
