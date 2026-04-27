@@ -54,6 +54,17 @@ sqlite.exec(`
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS channel_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_name TEXT NOT NULL,
+    channel_url TEXT,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    admin_note TEXT,
+    seen_by_user INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY,
     pricing_text TEXT NOT NULL,
