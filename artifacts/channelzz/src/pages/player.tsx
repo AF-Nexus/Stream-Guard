@@ -98,34 +98,29 @@ export default function Player() {
         const hls = new Hls({
           enableWorker: true,
 
-          // ── Stability: disable low-latency mode for regular HLS streams
-          // lowLatencyMode causes constant live-edge seeking → flickering
-          lowLatencyMode: false,
-
-          // ── Buffer tuning: bigger buffer = smoother playback
-          maxBufferLength: 60,           // up to 60s forward buffer
-          maxMaxBufferLength: 120,       // absolute max
-          backBufferLength: 30,          // keep 30s behind for seek
-          maxBufferHole: 0.5,            // fill gaps up to 0.5s automatically
-
-          // ── Live sync: stay 3 segments behind live edge (not 1)
-          // Too close to edge = constant stalling and seeking
-          liveSyncDurationCount: 5,
-          liveMaxLatencyDurationCount: 15,
+          // ── Low latency: on but tuned to not flicker
+          lowLatencyMode: true,
+          liveSyncDurationCount: 5,          // stay 5 segments from edge (not 1-3)
+          liveMaxLatencyDurationCount: 15,   // tolerance before force-seek
           liveBackBufferLength: 30,
 
-          // ── Retry on network issues
+          // ── Buffer: enough to absorb network hiccups
+          maxBufferLength: 45,
+          maxMaxBufferLength: 90,
+          backBufferLength: 20,
+          maxBufferHole: 0.5,               // auto-fill small gaps
+
+          // ── ABR: smooth quality switching
+          abrEwmaDefaultEstimate: 1500000,   // assume 1.5Mbps to start
+          startLevel: -1,                    // auto-pick quality
+
+          // ── Retries
           manifestLoadingMaxRetry: 8,
           levelLoadingMaxRetry: 8,
           fragLoadingMaxRetry: 8,
           manifestLoadingRetryDelay: 1000,
           levelLoadingRetryDelay: 1000,
           fragLoadingRetryDelay: 1000,
-          manifestLoadingMaxRetryTimeout: 8000,
-
-          // ── Smooth ABR switching (no quality flicker mid-stream)
-          abrEwmaDefaultEstimate: 1000000, // start assuming 1Mbps
-          startLevel: -1,                  // auto-pick starting quality
         });
         hlsRef.current = hls;
 
@@ -295,7 +290,6 @@ export default function Player() {
                   autoPlay
                   playsInline
                   controlsList="nodownload noremoteplayback"
-                  disablePictureInPicture
                   onContextMenu={(e) => e.preventDefault()}
                   crossOrigin="anonymous"
                   onPlay={() => setIsPlaying(true)}
