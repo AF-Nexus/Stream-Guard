@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, usersTable, categoriesTable, channelsTable, announcementsTable, settingsTable } from "@workspace/db";
+import { db, usersTable, categoriesTable, channelsTable, announcementsTable, settingsTable, channelRequestsTable } from "@workspace/db";
 import { eq, desc, sql, and, gt, lt } from "drizzle-orm";
 import { requireAuth, requireAdmin, userAccessStatus, userHasAccess, type AuthedRequest } from "../lib/auth.js";
 import { signStreamToken } from "../lib/streamToken.js";
@@ -102,6 +102,79 @@ router.post("/channels/:id/play", requireAuth, async (req: AuthedRequest, res: R
   const token = signStreamToken({ cid: c.id, uid: row.id }, ttl);
   const playlistUrl = `/api/stream/p/${token}/index.m3u8`;
   res.json({ playlistUrl, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() });
+});
+
+// --- Channel Requests (user) ---
+router.post("/channel-requests", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const b = req.body as { channelName?: string; channelUrl?: string; notes?: string };
+  if (!b.channelName?.trim()) { res.status(400).json({ error: "channelName required" }); return; }
+  const [r] = await db.insert(channelRequestsTable).values({
+    userId: req.userRow!.id,
+    channelName: b.channelName.trim(),
+    channelUrl: b.channelUrl?.trim() || null,
+    notes: b.notes?.trim() || null,
+  }).returning();
+  res.json(r);
+});
+
+router.get("/channel-requests/mine", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const rows = await db.select().from(channelRequestsTable)
+    .where(eq(channelRequestsTable.userId, req.userRow!.id))
+    .orderBy(desc(channelRequestsTable.createdAt));
+  // Mark all as seen after reading
+  await db.update(channelRequestsTable)
+    .set({ seenByUser: true })
+    .where(eq(channelRequestsTable.userId, req.userRow!.id));
+  res.json(rows);
+});
+
+router.get("/channel-requests/mine/unseen", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const rows = await db.select().from(channelRequestsTable)
+    .where(and(
+      eq(channelRequestsTable.userId, req.userRow!.id),
+      eq(channelRequestsTable.seenByUser, false),
+    ));
+  // Only return ones that have been actioned (not still pending)
+  const actioned = rows.filter(r => r.status !== "pending");
+  res.json(actioned);
+});
+
+// --- Channel Requests (admin) ---
+router.get("/admin/channel-requests", requireAuth, requireAdmin, async (_req, res) => {
+  const rows = await db
+    .select({
+      id: channelRequestsTable.id,
+      channelName: channelRequestsTable.channelName,
+      channelUrl: channelRequestsTable.channelUrl,
+      notes: channelRequestsTable.notes,
+      status: channelRequestsTable.status,
+      adminNote: channelRequestsTable.adminNote,
+      createdAt: channelRequestsTable.createdAt,
+      userId: channelRequestsTable.userId,
+      userEmail: usersTable.email,
+      userName: usersTable.name,
+    })
+    .from(channelRequestsTable)
+    .innerJoin(usersTable, eq(channelRequestsTable.userId, usersTable.id))
+    .orderBy(desc(channelRequestsTable.createdAt));
+  res.json(rows.map(r => ({ ...r, createdAt: r.createdAt.toISOString() })));
+});
+
+router.patch("/admin/channel-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  const b = req.body as { status?: "approved" | "rejected"; adminNote?: string };
+  if (!b.status) { res.status(400).json({ error: "status required" }); return; }
+  const [r] = await db.update(channelRequestsTable)
+    .set({ status: b.status, adminNote: b.adminNote?.trim() || null, seenByUser: false })
+    .where(eq(channelRequestsTable.id, id))
+    .returning();
+  if (!r) { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ ...r, createdAt: r.createdAt.toISOString() });
+});
+
+router.delete("/admin/channel-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+  await db.delete(channelRequestsTable).where(eq(channelRequestsTable.id, String(req.params.id)));
+  res.json({ ok: true });
 });
 
 // --- Admin ---
