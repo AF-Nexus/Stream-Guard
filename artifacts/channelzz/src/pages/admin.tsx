@@ -7,7 +7,8 @@ import {
   useListCategories, useCreateCategory, useDeleteCategory,
   useListAdminUsers, useUpdateUserAccess,
   useListAnnouncements, useCreateAnnouncement, useDeleteAnnouncement,
-  useGetSettings, useUpdateSettings
+  useGetSettings, useUpdateSettings,
+  useAdminChannelRequests, useUpdateChannelRequest, useDeleteChannelRequest,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -38,7 +39,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { 
   Users, Tv, LayoutDashboard, Settings as SettingsIcon, Bell, 
-  Trash2, Edit, CheckCircle2, XCircle, ShieldAlert 
+  Trash2, Edit, CheckCircle2, XCircle, ShieldAlert, Inbox
 } from "lucide-react";
 
 export default function Admin() {
@@ -66,6 +67,7 @@ export default function Admin() {
           <TabsTrigger value="channels" className="gap-2 rounded-md"><Tv className="h-4 w-4" /> Channels</TabsTrigger>
           <TabsTrigger value="categories" className="gap-2 rounded-md"><LayoutDashboard className="h-4 w-4" /> Categories</TabsTrigger>
           <TabsTrigger value="users" className="gap-2 rounded-md"><Users className="h-4 w-4" /> Users</TabsTrigger>
+          <TabsTrigger value="requests" className="gap-2 rounded-md"><Inbox className="h-4 w-4" /> Requests</TabsTrigger>
           <TabsTrigger value="announcements" className="gap-2 rounded-md"><Bell className="h-4 w-4" /> Announcements</TabsTrigger>
           <TabsTrigger value="settings" className="gap-2 rounded-md"><SettingsIcon className="h-4 w-4" /> Settings</TabsTrigger>
         </TabsList>
@@ -84,6 +86,10 @@ export default function Admin() {
 
         <TabsContent value="users" className="space-y-4">
           <UsersTab />
+        </TabsContent>
+
+        <TabsContent value="requests" className="space-y-4">
+          <ChannelRequestsTab />
         </TabsContent>
 
         <TabsContent value="announcements" className="space-y-4">
@@ -808,5 +814,184 @@ function SettingsTab() {
         </Form>
       </CardContent>
     </Card>
+  );
+}
+
+function ChannelRequestsTab() {
+  const { data: requests, isLoading } = useAdminChannelRequests();
+  const updateRequest = useUpdateChannelRequest();
+  const deleteRequest = useDeleteChannelRequest();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [replyDialog, setReplyDialog] = useState<{ id: string; channelName: string; action: "approved" | "rejected" } | null>(null);
+  const [adminNote, setAdminNote] = useState("");
+
+  const handleAction = async () => {
+    if (!replyDialog) return;
+    try {
+      await updateRequest.mutateAsync({ id: replyDialog.id, status: replyDialog.action, adminNote });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/channel-requests"] });
+      toast({ title: replyDialog.action === "approved" ? "Request approved ✓" : "Request rejected" });
+      setReplyDialog(null);
+      setAdminNote("");
+    } catch {
+      toast({ title: "Action failed", variant: "destructive" });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteRequest.mutateAsync(id);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/channel-requests"] });
+      toast({ title: "Request deleted" });
+    } catch {
+      toast({ title: "Failed to delete", variant: "destructive" });
+    }
+  };
+
+  const pending = requests?.filter(r => r.status === "pending") ?? [];
+  const actioned = requests?.filter(r => r.status !== "pending") ?? [];
+
+  return (
+    <>
+      <Dialog open={!!replyDialog} onOpenChange={(o) => { if (!o) { setReplyDialog(null); setAdminNote(""); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{replyDialog?.action === "approved" ? "Approve Request" : "Reject Request"}</DialogTitle>
+            <DialogDescription>
+              Channel: <span className="font-semibold text-foreground">"{replyDialog?.channelName}"</span>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Message to user (optional)</label>
+              <Input
+                placeholder={replyDialog?.action === "approved" ? "e.g. Channel added! Check it out." : "e.g. We couldn't find a working stream."}
+                value={adminNote}
+                onChange={(e) => setAdminNote(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setReplyDialog(null)}>Cancel</Button>
+              <Button
+                className={`flex-1 ${replyDialog?.action === "rejected" ? "bg-destructive hover:bg-destructive/90" : ""}`}
+                onClick={handleAction}
+                disabled={updateRequest.isPending}
+              >
+                {replyDialog?.action === "approved" ? "Approve" : "Reject"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <div className="space-y-6">
+        {/* Pending */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Inbox className="h-5 w-5 text-primary" />
+              Pending Requests
+              {pending.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs font-bold bg-primary text-primary-foreground rounded-full">{pending.length}</span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? <Skeleton className="h-32 w-full" /> : pending.length === 0 ? (
+              <p className="text-muted-foreground text-sm text-center py-6">No pending requests.</p>
+            ) : (
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>URL</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pending.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="font-medium text-sm">{r.userEmail}</span>
+                            <span className="text-xs text-muted-foreground">{r.userName ?? ""}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-semibold">{r.channelName}</TableCell>
+                        <TableCell className="text-xs max-w-[150px] truncate">
+                          {r.channelUrl ? <a href={r.channelUrl} target="_blank" rel="noopener" className="text-primary underline">{r.channelUrl}</a> : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[150px] truncate">{r.notes ?? "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{format(new Date(r.createdAt), "PP")}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" variant="outline" className="text-green-600 border-green-600/30 hover:bg-green-600/10"
+                              onClick={() => { setReplyDialog({ id: r.id, channelName: r.channelName, action: "approved" }); setAdminNote(""); }}>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+                            </Button>
+                            <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                              onClick={() => { setReplyDialog({ id: r.id, channelName: r.channelName, action: "rejected" }); setAdminNote(""); }}>
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Actioned */}
+        {actioned.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle className="text-base">History</CardTitle></CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Note</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {actioned.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="text-sm">{r.userEmail}</TableCell>
+                        <TableCell className="font-medium">{r.channelName}</TableCell>
+                        <TableCell>
+                          <span className={`text-xs font-bold px-2 py-1 rounded ${r.status === "approved" ? "bg-green-500/10 text-green-600" : "bg-destructive/10 text-destructive"}`}>
+                            {r.status.toUpperCase()}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{r.adminNote ?? "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{format(new Date(r.createdAt), "PP")}</TableCell>
+                        <TableCell className="text-right">
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(r.id)}>
+                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </>
   );
 }
