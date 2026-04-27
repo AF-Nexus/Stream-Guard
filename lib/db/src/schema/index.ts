@@ -44,7 +44,17 @@ export const announcementsTable = sqliteTable("announcements", {
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
 });
 
-export const settingsTable = sqliteTable("settings", {
+export const channelRequestsTable = sqliteTable("channel_requests", {
+  id: text("id").primaryKey().$defaultFn(uuid),
+  userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  channelName: text("channel_name").notNull(),
+  channelUrl: text("channel_url"),
+  notes: text("notes"),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected
+  adminNote: text("admin_note"),
+  seenByUser: integer("seen_by_user", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+});
   id: integer("id").primaryKey().default(1),
   pricingText: text("pricing_text").notNull(),
   whatsappNumber: text("whatsapp_number").notNull(),
