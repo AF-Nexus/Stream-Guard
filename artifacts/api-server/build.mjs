@@ -29,6 +29,8 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      "libsql",           // native Turso/libsql binary — must not be bundled
+      "@libsql/client",   // keep the libsql client external so it loads its own subpath exports at runtime
       "sharp",
       "better-sqlite3",
       "sqlite3",
