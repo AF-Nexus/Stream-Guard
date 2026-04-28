@@ -1,23 +1,19 @@
 {
-  "name": "@workspace/db",
+  "name": "workspace",
   "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
-  },
+  "license": "MIT",
   "scripts": {
-    "push": "drizzle-kit push --config ./drizzle.config.ts",
-    "push-force": "drizzle-kit push --force --config ./drizzle.config.ts"
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
-  "dependencies": {
-    "@libsql/client-web": "^0.14.0",
-    "drizzle-orm": "catalog:",
-    "drizzle-zod": "^0.8.3",
-    "zod": "catalog:"
-  },
+  "private": true,
   "devDependencies": {
-    "@types/node": "catalog:"
+    "typescript": "~5.9.2",
+    "prettier": "^3.8.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "bcrypt", "libsql"]
   }
 }
