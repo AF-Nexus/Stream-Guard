@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { 
   useGetMe, 
   useListChannels, 
@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Clock, Calendar, Lock, Play, MessageSquare, Tv, PlusCircle, CheckCircle2, XCircle, Bell } from "lucide-react";
+import { AlertTriangle, Clock, Calendar, Lock, Play, MessageSquare, Tv, PlusCircle, CheckCircle2, XCircle, Bell } from "lucide-react";
 import { differenceInDays, parseISO, isAfter } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -32,9 +32,11 @@ export default function Watch() {
   const [requestOpen, setRequestOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [reqName, setReqName] = useState("");
+  const [reqUrl, setReqUrl] = useState("");
   const [reqNotes, setReqNotes] = useState("");
   const [reqSuccess, setReqSuccess] = useState(false);
 
+  // Show notification popup when there are unseen actioned requests
   useEffect(() => {
     if (unseenRequests && unseenRequests.length > 0) {
       setNotifOpen(true);
@@ -44,19 +46,21 @@ export default function Watch() {
   const handleSubmitRequest = async () => {
     if (!reqName.trim()) return;
     try {
-      await submitRequest.mutateAsync({ channelName: reqName, notes: reqNotes });
+      await submitRequest.mutateAsync({ channelName: reqName, channelUrl: reqUrl, notes: reqNotes });
       setReqSuccess(true);
-      setReqName(""); setReqNotes("");
+      setReqName(""); setReqUrl(""); setReqNotes("");
     } catch {}
   };
 
   const isBanned = me?.banned;
   const accessStatus = me?.access;
 
+  // Filter channels
   const filteredChannels = channels?.filter(c => 
     activeCategory === "all" ? true : c.categoryId === activeCategory
   ) || [];
 
+  // Determine remaining days for trial or paid
   const getRemainingText = () => {
     if (!me) return null;
     const now = new Date();
@@ -101,7 +105,7 @@ export default function Watch() {
   return (
     <div className="container py-8 space-y-8">
 
-      {/* Notification Popup */}
+      {/* ── Notification Popup for actioned requests ── */}
       <AnimatePresence>
         {notifOpen && unseenRequests && unseenRequests.length > 0 && (
           <motion.div
@@ -132,7 +136,7 @@ export default function Watch() {
         )}
       </AnimatePresence>
 
-      {/* Channel Request Dialog */}
+      {/* ── Channel Request Dialog ── */}
       <Dialog open={requestOpen} onOpenChange={(o) => { setRequestOpen(o); if (!o) setReqSuccess(false); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -159,6 +163,14 @@ export default function Watch() {
                 />
               </div>
               <div className="space-y-1.5">
+                <label className="text-sm font-medium">Stream URL (optional)</label>
+                <Input
+                  placeholder="https://example.com/stream/index.m3u8"
+                  value={reqUrl}
+                  onChange={(e) => setReqUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Notes (optional)</label>
                 <Textarea
                   placeholder="Any extra details about the channel..."
@@ -177,7 +189,6 @@ export default function Watch() {
           )}
         </DialogContent>
       </Dialog>
-
       {/* Announcements */}
       {announcements && announcements.length > 0 && (
         <div className="space-y-2">
@@ -272,7 +283,7 @@ export default function Watch() {
       </div>
 
       {/* Channels Grid */}
-      <div className={`grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 ${isBlocked ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+      <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 ${isBlocked ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
         <AnimatePresence mode="popLayout">
           {filteredChannels.map((channel) => (
             <motion.div
@@ -282,40 +293,58 @@ export default function Watch() {
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ duration: 0.2 }}
               key={channel.id}
-              className="group relative bg-card border border-border/50 rounded-xl overflow-hidden hover:border-primary/50 hover:shadow-[0_0_20px_rgba(var(--primary),0.2)] transition-all cursor-pointer aspect-[16/10] flex flex-col"
-              onClick={() => {
-                if (!isBlocked) {
-                  setLocation(`/watch/${channel.id}`);
-                }
-              }}
+              className="group relative bg-card border border-border/50 rounded-2xl overflow-hidden hover:border-primary/50 hover:shadow-[0_0_24px_rgba(108,99,255,0.15)] transition-all cursor-pointer flex flex-col"
+              onClick={() => { if (!isBlocked) setLocation(`/watch/${channel.id}`); }}
             >
-              <div className="flex-1 bg-black/40 flex items-center justify-center p-4 relative">
+              {/* Logo area */}
+              <div className="bg-black/40 flex items-center justify-center p-5 relative" style={{ minHeight: "110px" }}>
                 {channel.logoUrl ? (
-                  <img src={channel.logoUrl} alt={channel.name} className="max-w-full max-h-full object-contain drop-shadow-lg" />
-                ) : (
-                  <Tv className="h-10 w-10 text-muted-foreground/50" />
-                )}
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="bg-primary text-primary-foreground p-3 rounded-full translate-y-4 group-hover:translate-y-0 transition-transform">
-                    <Play className="h-6 w-6 fill-current" />
+                  <img
+                    src={channel.logoUrl}
+                    alt={channel.name}
+                    className="max-w-full object-contain drop-shadow-lg"
+                    style={{ maxHeight: "80px" }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).nextElementSibling?.removeAttribute("style"); }}
+                  />
+                ) : null}
+                {/* TV icon fallback — always present, hidden when logo loads */}
+                <div className={`flex flex-col items-center gap-2 ${channel.logoUrl ? "hidden" : "flex"}`} style={{ display: channel.logoUrl ? "none" : "flex" }}>
+                  <Tv className="h-12 w-12 text-muted-foreground/40" />
+                  <span className="text-xs text-muted-foreground/50 font-medium">{channel.name.slice(0, 2).toUpperCase()}</span>
+                </div>
+
+                {/* Hover overlay */}
+                <div className="absolute inset-0 bg-black/65 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="bg-primary text-primary-foreground p-3 rounded-full translate-y-3 group-hover:translate-y-0 transition-transform shadow-lg">
+                    <Play className="h-5 w-5 fill-current" />
                   </div>
                 </div>
               </div>
-              <div className="p-3 bg-card border-t border-border/50">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-sm truncate">{channel.name}</h3>
-                  {channel.isLive && (
-                    <span className="flex h-2 w-2 rounded-full bg-red-500 animate-pulse shrink-0" />
-                  )}
+
+              {/* Name bar */}
+              <div className="px-3 py-2.5 bg-card border-t border-border/50 flex items-center gap-2">
+                {/* Mini logo icon */}
+                <div className="h-6 w-6 rounded bg-black/30 flex items-center justify-center shrink-0 border border-border/40 overflow-hidden">
+                  {channel.logoUrl
+                    ? <img src={channel.logoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                    : <Tv className="h-3.5 w-3.5 text-muted-foreground" />}
                 </div>
+                <div className="flex-1 min-w-0">
+                  {/* Full name — wraps to 2 lines max */}
+                  <h3 className="font-semibold text-sm leading-tight line-clamp-2">{channel.name}</h3>
+                </div>
+                {channel.isLive && (
+                  <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+                )}
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
-        
+
         {filteredChannels.length === 0 && (
-          <div className="col-span-full py-12 text-center text-muted-foreground border-2 border-dashed border-border rounded-xl">
-            No channels found in this category.
+          <div className="col-span-full py-16 text-center text-muted-foreground border-2 border-dashed border-border rounded-2xl">
+            <Tv className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p>No channels found in this category.</p>
           </div>
         )}
       </div>
