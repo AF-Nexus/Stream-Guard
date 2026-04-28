@@ -18,9 +18,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   async function handleSignOut() {
     try { await postJson("/auth/logout"); } catch { /* ignore */ }
-    queryClient.setQueryData(getGetMeQueryKey(), { authenticated: false });
-    queryClient.clear();
-    setLocation("/");
+    // Remove queries before clearing so refetch doesn't fire with stale data
+    queryClient.removeQueries();
+    setLocation("/sign-in");
   }
 
   const isAdmin = me?.authenticated && me.role === "admin";
