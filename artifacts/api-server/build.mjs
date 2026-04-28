@@ -102,6 +102,10 @@ async function buildAll() {
       "electron",
     ],
     sourcemap: "linked",
+    // Replace native libsql with a stub — @libsql/client/web uses fetch only
+    alias: {
+      "libsql": new URL("src/libsql-stub.cjs", import.meta.url).pathname,
+    },
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
