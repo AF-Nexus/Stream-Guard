@@ -22,15 +22,19 @@ export function issueSessionCookie(res: Response, userId: string) {
   const token = jwt.sign({ uid: userId }, getSecret(), { expiresIn: `${SESSION_TTL_DAYS}d` });
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: true,           // ← always true so sameSite=none works
-    sameSite: "none",       // ← changed from "lax" — required for iframe login
+    secure: true,        // required for SameSite=None
+    sameSite: "none",    // allows cookie in cross-site iframes (Netlify embedding Render)
     maxAge: SESSION_TTL_DAYS * 86400 * 1000,
     path: "/",
   });
 }
 
 export function clearSessionCookie(res: Response) {
-  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.clearCookie(COOKIE_NAME, {
+    path: "/",
+    secure: true,
+    sameSite: "none",   // must match how it was set
+  });
 }
 
 export function readSessionUserId(req: Request): string | null {
@@ -106,6 +110,6 @@ export function userHasAccess(row: typeof usersTable.$inferSelect): boolean {
 
 export async function getDefaultTrialMillis(): Promise<number> {
   const [s] = await db.select().from(settingsTable).limit(1);
-  const hours = s?.trialHours ?? 4;
-  return hours * 3600 * 1000;
+  const minutes = s?.trialMinutes ?? 30;
+  return minutes * 60 * 1000;
 }
