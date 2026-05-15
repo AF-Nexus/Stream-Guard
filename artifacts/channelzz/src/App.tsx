@@ -10,10 +10,13 @@ import { useGetMe } from "@workspace/api-client-react";
 import Home from "@/pages/home";
 import Watch from "@/pages/watch";
 import Player from "@/pages/player";
+import Sports from "@/pages/sports";
 import NotFound from "@/pages/not-found";
 import Admin from "@/pages/admin";
 import SignIn from "@/pages/sign-in";
 import SignUp from "@/pages/sign-up";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -62,6 +65,18 @@ function PlayerPortal() {
   );
 }
 
+function SportsPortal() {
+  const { data: me, isLoading } = useGetMe();
+  if (isLoading) return <Loading />;
+  if (!me?.authenticated) return <Redirect to="/sign-in" />;
+  return (
+    <Layout>
+      <Sports />
+      <WhatsAppButton />
+    </Layout>
+  );
+}
+
 function AdminPortal() {
   const { data: me, isLoading } = useGetMe();
   if (isLoading) return <Loading />;
@@ -84,8 +99,11 @@ function App() {
               <Route path="/" component={HomeRedirect} />
               <Route path="/sign-in" component={SignIn} />
               <Route path="/sign-up" component={SignUp} />
+              <Route path="/forgot-password" component={ForgotPassword} />
+              <Route path="/reset-password" component={ResetPassword} />
               <Route path="/watch" component={WatchPortal} />
               <Route path="/watch/:id" component={PlayerPortal} />
+              <Route path="/sports" component={SportsPortal} />
               <Route path="/admin" component={AdminPortal} />
               <Route component={NotFound} />
             </Switch>
