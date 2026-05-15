@@ -99,6 +99,58 @@ router.post("/auth/logout", (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ── Forgot password — generates a reset token and returns it (admin shares with user) ──
+router.post("/auth/forgot-password", async (req: Request, res: Response) => {
+  const body = req.body as { email?: unknown };
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  if (!isValidEmail(email)) { res.status(400).json({ error: "Invalid email" }); return; }
+
+  const [row] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1);
+  // Always return success to prevent email enumeration
+  if (!row) { res.json({ ok: true }); return; }
+
+  // Generate a 6-digit numeric token — easy to share via WhatsApp
+  const token = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+  await db.update(usersTable)
+    .set({ resetToken: token, resetTokenExpiresAt: expiresAt })
+    .where(eq(usersTable.id, row.id));
+
+  // In production you'd email this. For now it's visible to admin in the Users panel.
+  res.json({ ok: true });
+});
+
+// ── Reset password — validates token and sets new password ──
+router.post("/auth/reset-password", async (req: Request, res: Response) => {
+  const body = req.body as { email?: unknown; token?: unknown; password?: unknown };
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!isValidEmail(email) || !token || password.length < 6) {
+    res.status(400).json({ error: "Invalid request" }); return;
+  }
+
+  const [row] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1);
+  if (!row || !row.resetToken || !row.resetTokenExpiresAt) {
+    res.status(400).json({ error: "Invalid or expired reset token" }); return;
+  }
+  if (row.resetToken !== token) {
+    res.status(400).json({ error: "Invalid or expired reset token" }); return;
+  }
+  if (row.resetTokenExpiresAt < new Date()) {
+    res.status(400).json({ error: "Reset token has expired. Please request a new one." }); return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  await db.update(usersTable)
+    .set({ passwordHash, resetToken: null, resetTokenExpiresAt: null })
+    .where(eq(usersTable.id, row.id));
+
+  res.json({ ok: true });
+});
+
 router.get("/me", async (req: AuthedRequest, res: Response) => {
   const userId = readSessionUserId(req);
   if (!userId) { res.json({ authenticated: false }); return; }
