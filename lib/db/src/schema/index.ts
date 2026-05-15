@@ -32,8 +32,10 @@ export const channelsTable = sqliteTable("channels", {
   categoryId: text("category_id").notNull().references(() => categoriesTable.id, { onDelete: "cascade" }),
   logoUrl: text("logo_url").notNull(),
   sourceUrl: text("source_url").notNull(),
-  /** "hls" = m3u8 proxied through stream router; "embed" = third-party iframe player URL */
+  /** 'hls' = m3u8 proxied; 'embed' = iframe player URL */
   sourceType: text("source_type").notNull().default("hls"),
+  /** Referer header to send when proxying HLS — required by some CDNs */
+  sourceReferer: text("source_referer"),
   isLive: integer("is_live", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
 });
