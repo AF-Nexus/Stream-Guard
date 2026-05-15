@@ -15,6 +15,8 @@ export const usersTable = sqliteTable("users", {
   lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }),
   lastUserAgent: text("last_user_agent"),
   sessionsCount: integer("sessions_count").notNull().default(0),
+  resetToken: text("reset_token"),
+  resetTokenExpiresAt: integer("reset_token_expires_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -36,6 +38,8 @@ export const channelsTable = sqliteTable("channels", {
   sourceType: text("source_type").notNull().default("hls"),
   /** Referer header to send when proxying HLS — required by some CDNs */
   sourceReferer: text("source_referer"),
+  /** CDN Live TV channel name for sports event matching e.g. "arena sport 2" */
+  cdnChannelName: text("cdn_channel_name"),
   isLive: integer("is_live", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
 });
