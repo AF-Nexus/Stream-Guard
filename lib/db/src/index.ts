@@ -41,6 +41,7 @@ await client.executeMultiple(`
     source_url TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT 'hls',
     source_referer TEXT,
+    cdn_channel_name TEXT,
     is_live INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL
   );
@@ -75,6 +76,9 @@ await client.executeMultiple(`
 const migrations = [
   "ALTER TABLE channels ADD COLUMN source_type TEXT NOT NULL DEFAULT 'hls'",
   "ALTER TABLE channels ADD COLUMN source_referer TEXT",
+  "ALTER TABLE channels ADD COLUMN cdn_channel_name TEXT",
+  "ALTER TABLE users ADD COLUMN reset_token TEXT",
+  "ALTER TABLE users ADD COLUMN reset_token_expires_at INTEGER",
 ];
 for (const sql of migrations) {
   try { await client.execute(sql); } catch { /* column already exists — safe to ignore */ }
