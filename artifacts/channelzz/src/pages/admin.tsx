@@ -196,6 +196,7 @@ const channelSchema = z.object({
   logoUrl: z.string().url("Must be a valid URL"),
   sourceType: z.enum(["hls", "embed"]).default("hls"),
   sourceUrl: z.string().url("Must be a valid URL"),
+  sourceReferer: z.string().optional(),
   isLive: z.boolean().default(false),
 });
 
@@ -213,12 +214,12 @@ function ChannelsTab() {
 
   const form = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", isLive: false },
   });
 
   const editForm = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", isLive: false },
   });
 
   // Populate edit form when a channel is selected
@@ -231,6 +232,7 @@ function ChannelsTab() {
         logoUrl: editChannel.logoUrl ?? "",
         sourceType: (editChannel.sourceType === "embed" ? "embed" : "hls") as "hls" | "embed",
         sourceUrl: editChannel.sourceUrl ?? "",
+        sourceReferer: editChannel.sourceReferer ?? "",
         isLive: editChannel.isLive ?? false,
       });
     }
@@ -322,10 +324,22 @@ function ChannelsTab() {
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="sourceType"
-                  render={({ field }) => (
+                {form.watch("sourceType") === "hls" && (
+                  <FormField
+                    control={form.control}
+                    name="sourceReferer"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Referer Header <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
+                        <FormControl>
+                          <Input placeholder="https://cdnlivetv.tv/" {...field} />
+                        </FormControl>
+                        <FormDescription>Required for token-protected streams (e.g. cdnlivetv.ru). Leave blank for standard streams.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
                     <FormItem>
                       <FormLabel>Stream Type</FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
@@ -470,6 +484,16 @@ function ChannelsTab() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                {editForm.watch("sourceType") === "hls" && (
+                  <FormField control={editForm.control} name="sourceReferer" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
+                      <FormControl><Input placeholder="https://cdnlivetv.tv/" {...field} /></FormControl>
+                      <FormDescription>Required for token-protected streams. Leave blank for standard streams.</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
                 <FormField control={editForm.control} name="description" render={({ field }) => (
                   <FormItem><FormLabel>Description (Optional)</FormLabel><FormControl><Textarea {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
