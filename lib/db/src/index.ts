@@ -40,6 +40,7 @@ await client.executeMultiple(`
     logo_url TEXT NOT NULL,
     source_url TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT 'hls',
+    source_referer TEXT,
     is_live INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL
   );
@@ -73,6 +74,7 @@ await client.executeMultiple(`
 // We wrap each in its own try/catch so a duplicate-column error is silently swallowed.
 const migrations = [
   "ALTER TABLE channels ADD COLUMN source_type TEXT NOT NULL DEFAULT 'hls'",
+  "ALTER TABLE channels ADD COLUMN source_referer TEXT",
 ];
 for (const sql of migrations) {
   try { await client.execute(sql); } catch { /* column already exists — safe to ignore */ }
