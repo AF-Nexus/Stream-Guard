@@ -201,13 +201,14 @@ router.delete("/categories/:id", requireAuth, requireAdmin, async (req, res) => 
 });
 
 router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
-  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; isLive?: boolean };
+  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; cdnChannelName?: string; isLive?: boolean };
   if (!b.name || !b.categoryId || !b.logoUrl || !b.sourceUrl) { res.status(400).json({ error: "Missing fields" }); return; }
   const sourceType = b.sourceType === "embed" ? "embed" : "hls";
   const [c] = await db.insert(channelsTable).values({
     name: b.name, description: b.description ?? null, categoryId: b.categoryId,
     logoUrl: b.logoUrl, sourceUrl: b.sourceUrl, sourceType,
     sourceReferer: b.sourceReferer ?? null,
+    cdnChannelName: b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null,
     isLive: b.isLive ?? true,
   }).returning();
   const [cat] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, c!.categoryId)).limit(1);
@@ -215,7 +216,7 @@ router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
 });
 
 router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
-  const b = req.body as Partial<{ name: string; description: string; categoryId: string; logoUrl: string; sourceUrl: string; sourceType: string; sourceReferer: string; isLive: boolean }>;
+  const b = req.body as Partial<{ name: string; description: string; categoryId: string; logoUrl: string; sourceUrl: string; sourceType: string; sourceReferer: string; cdnChannelName: string; isLive: boolean }>;
   const update: Record<string, unknown> = {};
   if (b.name !== undefined) update.name = b.name;
   if (b.description !== undefined) update.description = b.description;
@@ -224,6 +225,7 @@ router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
   if (b.sourceUrl !== undefined && b.sourceUrl !== "") update.sourceUrl = b.sourceUrl;
   if (b.sourceType !== undefined) update.sourceType = b.sourceType === "embed" ? "embed" : "hls";
   if (b.sourceReferer !== undefined) update.sourceReferer = b.sourceReferer || null;
+  if (b.cdnChannelName !== undefined) update.cdnChannelName = b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null;
   if (b.isLive !== undefined) update.isLive = b.isLive;
   const [c] = await db.update(channelsTable).set(update).where(eq(channelsTable.id, String(req.params.id))).returning();
   if (!c) { res.status(404).json({ error: "Not found" }); return; }
@@ -277,7 +279,20 @@ router.get("/admin/users", requireAuth, requireAdmin, async (_req, res) => {
     lastSeenAt: r.lastSeenAt ? r.lastSeenAt.toISOString() : null,
     lastUserAgent: r.lastUserAgent ?? null,
     sessionsCount: r.sessionsCount,
+    resetToken: r.resetToken ?? null,
+    resetTokenExpiresAt: r.resetTokenExpiresAt ? r.resetTokenExpiresAt.toISOString() : null,
   })));
+});
+
+// Generate a password reset token for a user (admin action)
+router.post("/admin/users/:id/reset-token", requireAuth, requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  const [row] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const token = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+  await db.update(usersTable).set({ resetToken: token, resetTokenExpiresAt: expiresAt }).where(eq(usersTable.id, id));
+  res.json({ token, expiresAt: expiresAt.toISOString() });
 });
 
 router.patch("/admin/users/:id", requireAuth, requireAdmin, async (req, res) => {
@@ -339,6 +354,30 @@ router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
     totalCategories: catsR[0]?.c ?? 0,
     recentSignups: recent.map(u => ({ id: u.id, email: u.email, name: u.name ?? null, createdAt: u.createdAt.toISOString() })),
   });
+});
+
+// ── Sports API proxy ─────────────────────────────────────────────────────────
+router.get("/sports", requireAuth, async (_req, res) => {
+  try {
+    const r = await fetch("https://api.cdnlivetv.tv/api/v1/events/sports/?user=cdnlivetv&plan=free", {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!r.ok) { res.status(502).json({ error: `Upstream ${r.status}` }); return; }
+    const data = await r.json();
+    res.json(data);
+  } catch { res.status(502).json({ error: "Failed to reach sports API" }); }
+});
+
+// ── Sports channel resolve — checks if we have a custom HLS stream for a CDN channel ─────
+router.get("/sports/resolve", requireAuth, async (req, res) => {
+  const name = String(req.query.name ?? "").toLowerCase().trim();
+  if (!name) { res.json({ channelId: null }); return; }
+  const { like } = await import("drizzle-orm");
+  const rows = await db.select().from(channelsTable)
+    .where(like(channelsTable.cdnChannelName, name))
+    .limit(1);
+  res.json({ channelId: rows[0]?.id ?? null });
 });
 
 // ── Stream tester ─────────────────────────────────────────────────────────────
