@@ -340,6 +340,10 @@ function ChannelsTab() {
                     )}
                   />
                 )}
+                <FormField
+                  control={form.control}
+                  name="sourceType"
+                  render={({ field }) => (
                     <FormItem>
                       <FormLabel>Stream Type</FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
