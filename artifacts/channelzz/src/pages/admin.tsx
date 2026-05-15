@@ -197,6 +197,7 @@ const channelSchema = z.object({
   sourceType: z.enum(["hls", "embed"]).default("hls"),
   sourceUrl: z.string().url("Must be a valid URL"),
   sourceReferer: z.string().optional(),
+  cdnChannelName: z.string().optional(),
   isLive: z.boolean().default(false),
 });
 
@@ -214,12 +215,12 @@ function ChannelsTab() {
 
   const form = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", isLive: false },
   });
 
   const editForm = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", isLive: false },
   });
 
   // Populate edit form when a channel is selected
@@ -233,6 +234,7 @@ function ChannelsTab() {
         sourceType: (editChannel.sourceType === "embed" ? "embed" : "hls") as "hls" | "embed",
         sourceUrl: editChannel.sourceUrl ?? "",
         sourceReferer: editChannel.sourceReferer ?? "",
+        cdnChannelName: editChannel.cdnChannelName ?? "",
         isLive: editChannel.isLive ?? false,
       });
     }
@@ -273,166 +275,141 @@ function ChannelsTab() {
           <DialogTrigger asChild>
             <Button>Add Channel</Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[500px]">
-            <DialogHeader>
+          <DialogContent className="sm:max-w-[520px] max-h-[90vh] flex flex-col overflow-hidden p-0">
+            <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
               <DialogTitle>Add New Channel</DialogTitle>
-              <DialogDescription>Add a new HLS stream to the platform. Source URL is securely proxy-played.</DialogDescription>
+              <DialogDescription>Fill in the details below. Source URL is never exposed to users.</DialogDescription>
             </DialogHeader>
+            <div className="overflow-y-auto flex-1 px-6 pb-6">
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Channel Name</FormLabel>
-                      <FormControl><Input placeholder="SuperSport 1" {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="categoryId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Category</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a category" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {categories?.map(c => (
-                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="logoUrl"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Logo URL</FormLabel>
-                      <FormControl><Input placeholder="https://..." {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+                {/* Stream Type first so referer field shows/hides correctly */}
+                <FormField control={form.control} name="sourceType" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Stream Type</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="hls">HLS / M3U8 (proxied)</SelectItem>
+                        <SelectItem value="embed">Embed / iFrame Player</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="name" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Channel Name</FormLabel>
+                    <FormControl><Input placeholder="SuperSport 1" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="categoryId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Category</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select a category" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {categories?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="logoUrl" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Logo URL</FormLabel>
+                    <FormControl><Input placeholder="https://..." {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="sourceUrl" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{form.watch("sourceType") === "embed" ? "Embed Player URL" : "Stream URL (M3U8)"}</FormLabel>
+                    <FormControl>
+                      <Input placeholder={form.watch("sourceType") === "embed" ? "https://example.com/player/?channel=..." : "https://.../stream.m3u8"} {...field} />
+                    </FormControl>
+                    <FormDescription>Never exposed to clients.</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
                 {form.watch("sourceType") === "hls" && (
-                  <FormField
-                    control={form.control}
-                    name="sourceReferer"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Referer Header <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
-                        <FormControl>
-                          <Input placeholder="https://cdnlivetv.tv/" {...field} />
-                        </FormControl>
-                        <FormDescription>Required for token-protected streams (e.g. cdnlivetv.ru). Leave blank for standard streams.</FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  <FormField control={form.control} name="sourceReferer" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                      <FormControl><Input placeholder="https://cdnlivetv.tv/" {...field} /></FormControl>
+                      <FormDescription>Required for token-protected CDN streams.</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
                 )}
-                <FormField
-                  control={form.control}
-                  name="sourceType"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Stream Type</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select stream type" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="hls">HLS / M3U8 (proxied)</SelectItem>
-                          <SelectItem value="embed">Embed / iFrame Player</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormDescription>
-                        {field.value === "embed"
-                          ? "Paste the embed player URL — it will load inside an iframe."
-                          : "Paste an m3u8 URL — it will be proxied and never exposed to clients."}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="sourceUrl"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        {form.watch("sourceType") === "embed" ? "Embed Player URL" : "Stream URL (M3U8)"}
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder={form.watch("sourceType") === "embed"
-                            ? "https://example.com/player/?channel=..."
-                            : "https://.../stream.m3u8"}
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormDescription>Never exposed to clients.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="description"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Description (Optional)</FormLabel>
-                      <FormControl><Textarea placeholder="24/7 sports coverage..." {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="isLive"
-                  render={({ field }) => (
-                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                      <div className="space-y-0.5">
-                        <FormLabel className="text-base">Is Live</FormLabel>
-                        <FormDescription>Show the LIVE badge</FormDescription>
-                      </div>
-                      <FormControl>
-                        <Switch checked={field.value} onCheckedChange={field.onChange} />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-                <div className="flex justify-end pt-4">
+
+                <FormField control={form.control} name="cdnChannelName" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>CDN Channel Name <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                    <FormControl><Input placeholder="arena sport 2" {...field} /></FormControl>
+                    <FormDescription>Exact name from CDN Live TV — used to link sports events to this channel.</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="description" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                    <FormControl><Textarea placeholder="24/7 sports coverage..." {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="isLive" render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-sm">Show LIVE badge</FormLabel>
+                    </div>
+                    <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                  </FormItem>
+                )} />
+
+                <div className="flex justify-end pt-2">
                   <Button type="submit" disabled={createChannel.isPending}>
                     {createChannel.isPending ? "Creating..." : "Create Channel"}
                   </Button>
                 </div>
               </form>
             </Form>
+            </div>
           </DialogContent>
         </Dialog>
       </CardHeader>
       <CardContent>
         {/* ── Edit Dialog ── */}
         <Dialog open={!!editChannel} onOpenChange={(o) => { if (!o) setEditChannel(null); }}>
-          <DialogContent className="sm:max-w-[500px]">
-            <DialogHeader>
+          <DialogContent className="sm:max-w-[520px] max-h-[90vh] flex flex-col overflow-hidden p-0">
+            <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
               <DialogTitle>Edit Channel</DialogTitle>
               <DialogDescription>Update channel details. Leave Stream URL blank to keep existing.</DialogDescription>
             </DialogHeader>
+            <div className="overflow-y-auto flex-1 px-6 pb-6">
             <Form {...editForm}>
-              <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4">
+              <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
+                <FormField control={editForm.control} name="sourceType" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Stream Type</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="hls">HLS / M3U8 (proxied)</SelectItem>
+                        <SelectItem value="embed">Embed / iFrame Player</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
                 <FormField control={editForm.control} name="name" render={({ field }) => (
                   <FormItem><FormLabel>Channel Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
@@ -458,31 +435,11 @@ function ChannelsTab() {
                     <FormMessage />
                   </FormItem>
                 )} />
-                <FormField control={editForm.control} name="sourceType" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Stream Type</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select stream type" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="hls">HLS / M3U8 (proxied)</SelectItem>
-                        <SelectItem value="embed">Embed / iFrame Player</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
                 <FormField control={editForm.control} name="sourceUrl" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>
-                      {editForm.watch("sourceType") === "embed" ? "Embed Player URL" : "Stream URL (M3U8)"}
-                    </FormLabel>
+                    <FormLabel>{editForm.watch("sourceType") === "embed" ? "Embed Player URL" : "Stream URL (M3U8)"}</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder={editForm.watch("sourceType") === "embed"
-                          ? "https://example.com/player/?channel=..."
-                          : "Leave blank to keep existing"}
-                        {...field}
-                      />
+                      <Input placeholder={editForm.watch("sourceType") === "embed" ? "https://example.com/player/?channel=..." : "Leave blank to keep existing"} {...field} />
                     </FormControl>
                     <FormDescription>Never exposed to clients.</FormDescription>
                     <FormMessage />
@@ -491,19 +448,27 @@ function ChannelsTab() {
                 {editForm.watch("sourceType") === "hls" && (
                   <FormField control={editForm.control} name="sourceReferer" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
+                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
                       <FormControl><Input placeholder="https://cdnlivetv.tv/" {...field} /></FormControl>
-                      <FormDescription>Required for token-protected streams. Leave blank for standard streams.</FormDescription>
+                      <FormDescription>Required for token-protected CDN streams.</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )} />
                 )}
+                <FormField control={editForm.control} name="cdnChannelName" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>CDN Channel Name <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                    <FormControl><Input placeholder="arena sport 2" {...field} /></FormControl>
+                    <FormDescription>Exact CDN Live TV name — links sports events to this channel.</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
                 <FormField control={editForm.control} name="description" render={({ field }) => (
-                  <FormItem><FormLabel>Description (Optional)</FormLabel><FormControl><Textarea {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>Description <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel><FormControl><Textarea {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={editForm.control} name="isLive" render={({ field }) => (
-                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                    <div><FormLabel className="text-base">Is Live</FormLabel><FormDescription>Show the LIVE badge</FormDescription></div>
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+                    <FormLabel className="text-sm">Show LIVE badge</FormLabel>
                     <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                   </FormItem>
                 )} />
@@ -515,6 +480,7 @@ function ChannelsTab() {
                 </div>
               </form>
             </Form>
+            </div>
           </DialogContent>
         </Dialog>
 
