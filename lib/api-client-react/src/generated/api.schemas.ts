@@ -87,6 +87,8 @@ export interface ChannelInput {
   sourceUrl: string;
   /** 'hls' for m3u8 streams, 'embed' for iframe player URLs */
   sourceType?: "hls" | "embed";
+  /** Referer header sent by the proxy when fetching HLS — needed by token-protected CDNs */
+  sourceReferer?: string;
   isLive?: boolean;
 }
 
