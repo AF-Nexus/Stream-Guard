@@ -201,19 +201,21 @@ router.delete("/categories/:id", requireAuth, requireAdmin, async (req, res) => 
 });
 
 router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
-  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; isLive?: boolean };
+  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; isLive?: boolean };
   if (!b.name || !b.categoryId || !b.logoUrl || !b.sourceUrl) { res.status(400).json({ error: "Missing fields" }); return; }
   const sourceType = b.sourceType === "embed" ? "embed" : "hls";
   const [c] = await db.insert(channelsTable).values({
     name: b.name, description: b.description ?? null, categoryId: b.categoryId,
-    logoUrl: b.logoUrl, sourceUrl: b.sourceUrl, sourceType, isLive: b.isLive ?? true,
+    logoUrl: b.logoUrl, sourceUrl: b.sourceUrl, sourceType,
+    sourceReferer: b.sourceReferer ?? null,
+    isLive: b.isLive ?? true,
   }).returning();
   const [cat] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, c!.categoryId)).limit(1);
   res.json(serializeChannel(c!, cat?.name ?? ""));
 });
 
 router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
-  const b = req.body as Partial<{ name: string; description: string; categoryId: string; logoUrl: string; sourceUrl: string; sourceType: string; isLive: boolean }>;
+  const b = req.body as Partial<{ name: string; description: string; categoryId: string; logoUrl: string; sourceUrl: string; sourceType: string; sourceReferer: string; isLive: boolean }>;
   const update: Record<string, unknown> = {};
   if (b.name !== undefined) update.name = b.name;
   if (b.description !== undefined) update.description = b.description;
@@ -221,6 +223,7 @@ router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
   if (b.logoUrl !== undefined) update.logoUrl = b.logoUrl;
   if (b.sourceUrl !== undefined && b.sourceUrl !== "") update.sourceUrl = b.sourceUrl;
   if (b.sourceType !== undefined) update.sourceType = b.sourceType === "embed" ? "embed" : "hls";
+  if (b.sourceReferer !== undefined) update.sourceReferer = b.sourceReferer || null;
   if (b.isLive !== undefined) update.isLive = b.isLive;
   const [c] = await db.update(channelsTable).set(update).where(eq(channelsTable.id, String(req.params.id))).returning();
   if (!c) { res.status(404).json({ error: "Not found" }); return; }
