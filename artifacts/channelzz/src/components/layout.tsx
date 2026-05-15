@@ -56,6 +56,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     Admin
                   </Link>
                 )}
+                <Link href="/sports" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
+                  Sports
+                </Link>
                 <Link href="/watch" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block mr-2">
                   Watch
                 </Link>
