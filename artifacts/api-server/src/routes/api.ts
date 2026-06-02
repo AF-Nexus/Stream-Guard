@@ -1,0 +1,686 @@
+import { Router, type IRouter, type Request, type Response } from "express";
+import { db, usersTable, categoriesTable, channelsTable, announcementsTable, settingsTable, channelRequestsTable } from "@workspace/db";
+import { eq, desc, sql, and, gt, lt } from "drizzle-orm";
+import { requireAuth, requireAdmin, userAccessStatus, userHasAccess, type AuthedRequest } from "../lib/auth.js";
+import { signStreamToken } from "../lib/streamToken.js";
+import streamRouter from "./stream.js";
+
+const router: IRouter = Router();
+
+function slugify(s: string) {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `cat-${Date.now()}`;
+}
+
+function serializeChannel(c: typeof channelsTable.$inferSelect, categoryName: string) {
+  return {
+    id: c.id,
+    name: c.name,
+    description: c.description ?? undefined,
+    categoryId: c.categoryId,
+    categoryName,
+    logoUrl: c.logoUrl,
+    isLive: c.isLive,
+    createdAt: c.createdAt.toISOString(),
+  };
+}
+
+// --- Stream proxy (no auth — token-based) ---
+router.use("/stream", streamRouter);
+
+// --- Public ---
+router.get("/categories", async (_req, res) => {
+  const rows = await db.select().from(categoriesTable).orderBy(categoriesTable.name);
+  res.json(rows.map(r => ({ id: r.id, name: r.name, slug: r.slug, createdAt: r.createdAt.toISOString() })));
+});
+
+router.get("/announcements", async (_req, res) => {
+  // auto-cleanup expired
+  await db.delete(announcementsTable).where(lt(announcementsTable.expiresAt, new Date()));
+  const rows = await db.select().from(announcementsTable).orderBy(desc(announcementsTable.createdAt));
+  res.json(rows.map(r => ({
+    id: r.id, title: r.title, body: r.body,
+    createdAt: r.createdAt.toISOString(), expiresAt: r.expiresAt.toISOString(),
+  })));
+});
+
+router.get("/settings", async (_req, res) => {
+  const [s] = await db.select().from(settingsTable).limit(1);
+  if (!s) {
+    res.json({ pricingText: "Contact admin for pricing.", whatsappNumber: "265993702468", trialMinutes: 30 });
+    return;
+  }
+  res.json({ pricingText: s.pricingText, whatsappNumber: s.whatsappNumber, trialMinutes: s.trialMinutes });
+});
+
+router.get("/channels", async (_req, res) => {
+  const rows = await db
+    .select({
+      id: channelsTable.id,
+      name: channelsTable.name,
+      description: channelsTable.description,
+      categoryId: channelsTable.categoryId,
+      categoryName: categoriesTable.name,
+      logoUrl: channelsTable.logoUrl,
+      isLive: channelsTable.isLive,
+      createdAt: channelsTable.createdAt,
+    })
+    .from(channelsTable)
+    .innerJoin(categoriesTable, eq(channelsTable.categoryId, categoriesTable.id))
+    .orderBy(channelsTable.name);
+  res.json(rows.map(r => ({ ...r, createdAt: r.createdAt.toISOString(), description: r.description ?? undefined })));
+});
+
+router.get("/channels/:id", async (req, res) => {
+  const id = String(req.params.id);
+  const [r] = await db
+    .select({
+      id: channelsTable.id,
+      name: channelsTable.name,
+      description: channelsTable.description,
+      categoryId: channelsTable.categoryId,
+      categoryName: categoriesTable.name,
+      logoUrl: channelsTable.logoUrl,
+      isLive: channelsTable.isLive,
+      createdAt: channelsTable.createdAt,
+    })
+    .from(channelsTable)
+    .innerJoin(categoriesTable, eq(channelsTable.categoryId, categoriesTable.id))
+    .where(eq(channelsTable.id, id))
+    .limit(1);
+  if (!r) { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ ...r, createdAt: r.createdAt.toISOString(), description: r.description ?? undefined });
+});
+
+// --- Authenticated ---
+router.post("/channels/:id/play", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const id = String(req.params.id);
+  const row = req.userRow!;
+  if (!userHasAccess(row)) { res.status(403).json({ error: "No active subscription" }); return; }
+  const [c] = await db.select().from(channelsTable).where(eq(channelsTable.id, id)).limit(1);
+  if (!c) { res.status(404).json({ error: "Not found" }); return; }
+  const ttl = 60 * 60; // 1 hour
+  const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+
+  if (c.sourceType === "embed") {
+    // Embed channels: return the URL directly (it's a public player page, not a secret stream)
+    res.json({ type: "embed", embedUrl: c.sourceUrl, expiresAt });
+    return;
+  }
+
+  // Default: HLS m3u8 proxied through stream router
+  const token = signStreamToken({ cid: c.id, uid: row.id }, ttl);
+  const playlistUrl = `/api/stream/p/${token}/index.m3u8`;
+  res.json({ type: "hls", playlistUrl, expiresAt });
+});
+
+// --- Channel Requests (user) ---
+router.post("/channel-requests", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const b = req.body as { channelName?: string; channelUrl?: string; notes?: string };
+  if (!b.channelName?.trim()) { res.status(400).json({ error: "channelName required" }); return; }
+  const [r] = await db.insert(channelRequestsTable).values({
+    userId: req.userRow!.id,
+    channelName: b.channelName.trim(),
+    channelUrl: b.channelUrl?.trim() || null,
+    notes: b.notes?.trim() || null,
+  }).returning();
+  res.json(r);
+});
+
+router.get("/channel-requests/mine", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const rows = await db.select().from(channelRequestsTable)
+    .where(eq(channelRequestsTable.userId, req.userRow!.id))
+    .orderBy(desc(channelRequestsTable.createdAt));
+  // Mark all as seen after reading
+  await db.update(channelRequestsTable)
+    .set({ seenByUser: true })
+    .where(eq(channelRequestsTable.userId, req.userRow!.id));
+  res.json(rows);
+});
+
+router.get("/channel-requests/mine/unseen", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const rows = await db.select().from(channelRequestsTable)
+    .where(and(
+      eq(channelRequestsTable.userId, req.userRow!.id),
+      eq(channelRequestsTable.seenByUser, false),
+    ));
+  // Only return ones that have been actioned (not still pending)
+  const actioned = rows.filter(r => r.status !== "pending");
+  res.json(actioned);
+});
+
+// --- Channel Requests (admin) ---
+router.get("/admin/channel-requests", requireAuth, requireAdmin, async (_req, res) => {
+  const rows = await db
+    .select({
+      id: channelRequestsTable.id,
+      channelName: channelRequestsTable.channelName,
+      channelUrl: channelRequestsTable.channelUrl,
+      notes: channelRequestsTable.notes,
+      status: channelRequestsTable.status,
+      adminNote: channelRequestsTable.adminNote,
+      createdAt: channelRequestsTable.createdAt,
+      userId: channelRequestsTable.userId,
+      userEmail: usersTable.email,
+      userName: usersTable.name,
+    })
+    .from(channelRequestsTable)
+    .innerJoin(usersTable, eq(channelRequestsTable.userId, usersTable.id))
+    .orderBy(desc(channelRequestsTable.createdAt));
+  res.json(rows.map(r => ({ ...r, createdAt: r.createdAt.toISOString() })));
+});
+
+router.patch("/admin/channel-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  const b = req.body as { status?: "approved" | "rejected"; adminNote?: string };
+  if (!b.status) { res.status(400).json({ error: "status required" }); return; }
+  const [r] = await db.update(channelRequestsTable)
+    .set({ status: b.status, adminNote: b.adminNote?.trim() || null, seenByUser: false })
+    .where(eq(channelRequestsTable.id, id))
+    .returning();
+  if (!r) { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ ...r, createdAt: r.createdAt.toISOString() });
+});
+
+router.delete("/admin/channel-requests/:id", requireAuth, requireAdmin, async (req, res) => {
+  await db.delete(channelRequestsTable).where(eq(channelRequestsTable.id, String(req.params.id)));
+  res.json({ ok: true });
+});
+
+// --- Admin ---
+router.post("/categories", requireAuth, requireAdmin, async (req, res) => {
+  const name = String((req.body as { name?: string }).name ?? "").trim();
+  if (!name) { res.status(400).json({ error: "name required" }); return; }
+  const slug = slugify(name);
+  const [r] = await db.insert(categoriesTable).values({ name, slug }).returning();
+  res.json({ id: r!.id, name: r!.name, slug: r!.slug, createdAt: r!.createdAt.toISOString() });
+});
+
+router.delete("/categories/:id", requireAuth, requireAdmin, async (req, res) => {
+  await db.delete(categoriesTable).where(eq(categoriesTable.id, String(req.params.id)));
+  res.json({ ok: true });
+});
+
+router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
+  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; cdnChannelName?: string; isLive?: boolean };
+  if (!b.name || !b.categoryId || !b.logoUrl || !b.sourceUrl) { res.status(400).json({ error: "Missing fields" }); return; }
+  const sourceType = b.sourceType === "embed" ? "embed" : "hls";
+  const [c] = await db.insert(channelsTable).values({
+    name: b.name, description: b.description ?? null, categoryId: b.categoryId,
+    logoUrl: b.logoUrl, sourceUrl: b.sourceUrl, sourceType,
+    sourceReferer: b.sourceReferer ?? null,
+    cdnChannelName: b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null,
+    isLive: b.isLive ?? true,
+  }).returning();
+  const [cat] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, c!.categoryId)).limit(1);
+  res.json(serializeChannel(c!, cat?.name ?? ""));
+});
+
+router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
+  const b = req.body as Partial<{ name: string; description: string; categoryId: string; logoUrl: string; sourceUrl: string; sourceType: string; sourceReferer: string; cdnChannelName: string; isLive: boolean }>;
+  const update: Record<string, unknown> = {};
+  if (b.name !== undefined) update.name = b.name;
+  if (b.description !== undefined) update.description = b.description;
+  if (b.categoryId !== undefined) update.categoryId = b.categoryId;
+  if (b.logoUrl !== undefined) update.logoUrl = b.logoUrl;
+  if (b.sourceUrl !== undefined && b.sourceUrl !== "") update.sourceUrl = b.sourceUrl;
+  if (b.sourceType !== undefined) update.sourceType = b.sourceType === "embed" ? "embed" : "hls";
+  if (b.sourceReferer !== undefined) update.sourceReferer = b.sourceReferer || null;
+  if (b.cdnChannelName !== undefined) update.cdnChannelName = b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null;
+  if (b.isLive !== undefined) update.isLive = b.isLive;
+  const [c] = await db.update(channelsTable).set(update).where(eq(channelsTable.id, String(req.params.id))).returning();
+  if (!c) { res.status(404).json({ error: "Not found" }); return; }
+  const [cat] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, c.categoryId)).limit(1);
+  res.json(serializeChannel(c, cat?.name ?? ""));
+});
+
+router.delete("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
+  await db.delete(channelsTable).where(eq(channelsTable.id, String(req.params.id)));
+  res.json({ ok: true });
+});
+
+router.post("/announcements", requireAuth, requireAdmin, async (req, res) => {
+  const b = req.body as { title?: string; body?: string };
+  if (!b.title || !b.body) { res.status(400).json({ error: "Missing fields" }); return; }
+  const expiresAt = new Date(Date.now() + 24 * 3600 * 1000);
+  const [a] = await db.insert(announcementsTable).values({ title: b.title, body: b.body, expiresAt }).returning();
+  res.json({ id: a!.id, title: a!.title, body: a!.body, createdAt: a!.createdAt.toISOString(), expiresAt: a!.expiresAt.toISOString() });
+});
+
+router.delete("/announcements/:id", requireAuth, requireAdmin, async (req, res) => {
+  await db.delete(announcementsTable).where(eq(announcementsTable.id, String(req.params.id)));
+  res.json({ ok: true });
+});
+
+router.put("/settings", requireAuth, requireAdmin, async (req, res) => {
+  const b = req.body as { pricingText?: string; whatsappNumber?: string; trialMinutes?: number };
+  if (!b.pricingText || !b.whatsappNumber || b.trialMinutes === undefined) { res.status(400).json({ error: "Missing fields" }); return; }
+  const [s] = await db
+    .insert(settingsTable)
+    .values({ id: 1, pricingText: b.pricingText, whatsappNumber: b.whatsappNumber, trialMinutes: b.trialMinutes })
+    .onConflictDoUpdate({
+      target: settingsTable.id,
+      set: { pricingText: b.pricingText, whatsappNumber: b.whatsappNumber, trialMinutes: b.trialMinutes },
+    })
+    .returning();
+  res.json({ pricingText: s!.pricingText, whatsappNumber: s!.whatsappNumber, trialMinutes: s!.trialMinutes });
+});
+
+router.get("/admin/users", requireAuth, requireAdmin, async (_req, res) => {
+  const rows = await db.select().from(usersTable).orderBy(desc(usersTable.createdAt));
+  res.json(rows.map(r => ({
+    id: r.id, email: r.email,
+    name: r.name ?? null, avatarUrl: r.avatarUrl ?? null,
+    role: r.role as "admin" | "user",
+    access: userAccessStatus(r),
+    banned: r.banned,
+    trialEndsAt: r.trialEndsAt ? r.trialEndsAt.toISOString() : null,
+    subscriptionEndsAt: r.subscriptionEndsAt ? r.subscriptionEndsAt.toISOString() : null,
+    createdAt: r.createdAt.toISOString(),
+    lastSeenAt: r.lastSeenAt ? r.lastSeenAt.toISOString() : null,
+    lastUserAgent: r.lastUserAgent ?? null,
+    sessionsCount: r.sessionsCount,
+    resetToken: r.resetToken ?? null,
+    resetTokenExpiresAt: r.resetTokenExpiresAt ? r.resetTokenExpiresAt.toISOString() : null,
+  })));
+});
+
+// Generate a password reset token for a user (admin action)
+router.post("/admin/users/:id/reset-token", requireAuth, requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  const [row] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const token = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+  await db.update(usersTable).set({ resetToken: token, resetTokenExpiresAt: expiresAt }).where(eq(usersTable.id, id));
+  res.json({ token, expiresAt: expiresAt.toISOString() });
+});
+
+router.patch("/admin/users/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  const b = req.body as { addDays?: number; addHours?: number; addMinutes?: number; setSubscriptionEndsAt?: string | null; banned?: boolean };
+  const [existing] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+  const update: Record<string, unknown> = {};
+
+  // Custom duration: addDays, addHours, addMinutes all supported
+  const totalMs =
+    (typeof b.addDays === "number" ? b.addDays * 86400 * 1000 : 0) +
+    (typeof b.addHours === "number" ? b.addHours * 3600 * 1000 : 0) +
+    (typeof b.addMinutes === "number" ? b.addMinutes * 60 * 1000 : 0);
+
+  if (totalMs > 0) {
+    const base = existing.subscriptionEndsAt && existing.subscriptionEndsAt.getTime() > Date.now()
+      ? existing.subscriptionEndsAt.getTime() : Date.now();
+    update.subscriptionEndsAt = new Date(base + totalMs);
+  }
+  if (b.setSubscriptionEndsAt !== undefined) {
+    update.subscriptionEndsAt = b.setSubscriptionEndsAt ? new Date(b.setSubscriptionEndsAt) : null;
+  }
+  if (typeof b.banned === "boolean") update.banned = b.banned;
+  const [r] = await db.update(usersTable).set(update).where(eq(usersTable.id, id)).returning();
+  res.json({
+    id: r!.id, email: r!.email, name: r!.name ?? null, avatarUrl: r!.avatarUrl ?? null,
+    role: r!.role as "admin" | "user",
+    access: userAccessStatus(r!),
+    banned: r!.banned,
+    trialEndsAt: r!.trialEndsAt ? r!.trialEndsAt.toISOString() : null,
+    subscriptionEndsAt: r!.subscriptionEndsAt ? r!.subscriptionEndsAt.toISOString() : null,
+    createdAt: r!.createdAt.toISOString(),
+    lastSeenAt: r!.lastSeenAt ? r!.lastSeenAt.toISOString() : null,
+    lastUserAgent: r!.lastUserAgent ?? null,
+    sessionsCount: r!.sessionsCount,
+  });
+});
+
+router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
+  const totalUsersR = await db.select({ c: sql<number>`count(*)` }).from(usersTable);
+  const bannedR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(eq(usersTable.banned, true));
+  const paidR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.subscriptionEndsAt, new Date())));
+  const trialR = await db.select({ c: sql<number>`count(*)` }).from(usersTable).where(and(eq(usersTable.banned, false), gt(usersTable.trialEndsAt, new Date())));
+  const channelsR = await db.select({ c: sql<number>`count(*)` }).from(channelsTable);
+  const catsR = await db.select({ c: sql<number>`count(*)` }).from(categoriesTable);
+  const recent = await db.select().from(usersTable).orderBy(desc(usersTable.createdAt)).limit(8);
+  const totalUsers = totalUsersR[0]?.c ?? 0;
+  const banned = bannedR[0]?.c ?? 0;
+  const paid = paidR[0]?.c ?? 0;
+  const trial = trialR[0]?.c ?? 0;
+  res.json({
+    totalUsers,
+    activeUsers: paid + trial,
+    paidUsers: paid,
+    trialUsers: trial,
+    bannedUsers: banned,
+    totalChannels: channelsR[0]?.c ?? 0,
+    totalCategories: catsR[0]?.c ?? 0,
+    recentSignups: recent.map(u => ({ id: u.id, email: u.email, name: u.name ?? null, createdAt: u.createdAt.toISOString() })),
+  });
+});
+
+// ── Sports API proxy ─────────────────────────────────────────────────────────
+router.get("/sports", requireAuth, async (_req, res) => {
+  try {
+    const r = await fetch("https://api.cdnlivetv.tv/api/v1/events/sports/?user=cdnlivetv&plan=free", {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!r.ok) { res.status(502).json({ error: `Upstream ${r.status}` }); return; }
+    const data = await r.json();
+    res.json(data);
+  } catch { res.status(502).json({ error: "Failed to reach sports API" }); }
+});
+
+// ── Sports channel resolve — checks if we have a custom HLS stream for a CDN channel ─────
+router.get("/sports/resolve", requireAuth, async (req, res) => {
+  const name = String(req.query.name ?? "").toLowerCase().trim();
+  if (!name) { res.json({ channelId: null }); return; }
+  const { like } = await import("drizzle-orm");
+  const rows = await db.select().from(channelsTable)
+    .where(like(channelsTable.cdnChannelName, name))
+    .limit(1);
+  res.json({ channelId: rows[0]?.id ?? null });
+});
+
+// ── Stream tester ─────────────────────────────────────────────────────────────
+router.get("/admin/test-stream", requireAuth, requireAdmin, async (req, res) => {
+  const url = String(req.query.url ?? "");
+  const type = String(req.query.type ?? "hls");
+  if (!url) { res.status(400).json({ ok: false, error: "Missing url" }); return; }
+  try {
+    const r = await fetch(url, {
+      method: type === "hls" ? "GET" : "HEAD",
+      headers: { "User-Agent": "Mozilla/5.0", "Referer": new URL(url).origin + "/" },
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    // HLS: also check it starts with #EXTM3U
+    if (type === "hls") {
+      const text = await r.text();
+      res.json({ ok: r.ok && (text.startsWith("#EXTM3U") || text.startsWith("#EXT")) });
+    } else {
+      res.json({ ok: r.status < 400 });
+    }
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
+// ── M3U playlist proxy (avoids browser CORS) ─────────────────────────────────
+router.get("/admin/fetch-m3u", requireAuth, requireAdmin, async (req, res) => {
+  const url = String(req.query.url ?? "");
+  if (!url) { res.status(400).send("Missing url"); return; }
+  try {
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) { res.status(502).send(`Upstream ${r.status}`); return; }
+    const text = await r.text();
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(text);
+  } catch (e: any) {
+    res.status(502).send(e.message ?? "Fetch failed");
+  }
+});
+
+// ── Pluto TV Sync Engine ──────────────────────────────────────────────────────
+
+const PLUTO_REGIONS = ["us", "uk", "ca", "de", "fr", "es", "it"] as const;
+type PlutoRegion = typeof PLUTO_REGIONS[number];
+
+// Map Pluto's 30+ group-titles down to ~8 sensible categories
+const PLUTO_CATEGORY_MAP: Record<string, string> = {
+  // Movies
+  "movies": "Movies", "action movies": "Movies", "horror movies": "Movies",
+  "comedy movies": "Movies", "drama movies": "Movies", "thriller movies": "Movies",
+  "sci-fi movies": "Movies", "romance movies": "Movies", "animated movies": "Movies",
+  "family movies": "Movies", "western movies": "Movies", "documentary movies": "Movies",
+  "classic movies": "Movies", "indie movies": "Movies", "crime movies": "Movies",
+  // Sports
+  "sports": "Sports", "sports & fitness": "Sports", "football": "Sports",
+  "soccer": "Sports", "basketball": "Sports", "combat sports": "Sports",
+  // News
+  "news": "News", "news & opinion": "News", "world news": "News", "business news": "News",
+  // Entertainment
+  "entertainment": "Entertainment", "reality & docs": "Entertainment",
+  "reality tv": "Entertainment", "talk shows": "Entertainment", "awards shows": "Entertainment",
+  "game shows": "Entertainment",
+  // Music
+  "music": "Music", "music videos": "Music",
+  // Kids
+  "kids": "Kids", "kids & family": "Kids", "cartoons": "Kids",
+  // Lifestyle
+  "lifestyle": "Lifestyle", "food": "Lifestyle", "travel": "Lifestyle",
+  "home & garden": "Lifestyle", "fashion": "Lifestyle", "health & wellness": "Lifestyle",
+  // Tech / Science
+  "technology": "Lifestyle", "science": "Lifestyle", "nature": "Lifestyle",
+  // Culture & Arts
+  "arts & culture": "Entertainment", "spanish": "Entertainment",
+  "hispanic": "Entertainment", "lgbtq+": "Entertainment",
+};
+
+function mapPlutoGroup(group: string): string {
+  if (!group) return "Random";
+  return PLUTO_CATEGORY_MAP[group.toLowerCase()] ?? group; // keep original if no mapping
+}
+
+function plutoRawUrl(region: PlutoRegion, githubUser = "AF-Nexus") {
+  return `https://raw.githubusercontent.com/${githubUser}/Pluto-TV-Playlists/main/output/plutotv_${region}.m3u8`;
+}
+
+function parsePlutoM3U(text: string) {
+  const lines = text.split(/\r?\n/);
+  type Entry = { plutoTvId: string; name: string; logo: string; group: string; url: string };
+  const results: Entry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith("#EXTINF")) continue;
+    const url = lines[i + 1]?.trim();
+    if (!url || url.startsWith("#")) continue;
+    const tvgId = line.match(/tvg-id="([^"]+)"/)?.[1] ?? "";
+    const logo  = line.match(/tvg-logo="([^"]+)"/)?.[1] ?? "";
+    const group = line.match(/group-title="([^"]+)"/)?.[1]?.trim() ?? "";
+    const name  = line.match(/,(.+)$/)?.[1]?.trim() ?? "Unknown";
+    if (!tvgId || !url) continue;
+    results.push({ plutoTvId: tvgId, name, logo, group: mapPlutoGroup(group), url });
+  }
+  return results;
+}
+
+// Core sync — upserts by plutoTvId, claims orphans by name, removes stale
+async function runPlutoSync(region: PlutoRegion, githubUser = "AF-Nexus") {
+  const { like, or } = await import("drizzle-orm");
+  const rawUrl = plutoRawUrl(region, githubUser);
+  const r = await fetch(rawUrl, {
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "text/plain" },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!r.ok) throw new Error(`GitHub returned ${r.status}`);
+  const text = await r.text();
+  const channels = parsePlutoM3U(text);
+  if (channels.length === 0) throw new Error("Parsed 0 channels — aborting to avoid data loss");
+
+  // Category cache
+  const catCache = new Map<string, string>();
+  async function getOrCreateCategory(name: string) {
+    const key = name || "Random";
+    if (catCache.has(key)) return catCache.get(key)!;
+    const slug = slugify(key) || "random";
+    const existing = await db.select().from(categoriesTable).where(eq(categoriesTable.slug, slug)).limit(1);
+    if (existing[0]) { catCache.set(key, existing[0].id); return existing[0].id; }
+    const [created] = await db.insert(categoriesTable).values({ name: key, slug }).returning();
+    catCache.set(key, created!.id);
+    return created!.id;
+  }
+
+  let added = 0, updated = 0;
+  const seenIds = new Set<string>();
+
+  for (const ch of channels) {
+    seenIds.add(ch.plutoTvId);
+    const categoryId = await getOrCreateCategory(ch.group);
+
+    // 1. Try match by plutoTvId (exact — fastest path)
+    const byId = await db.select().from(channelsTable)
+      .where(eq(channelsTable.plutoTvId, ch.plutoTvId)).limit(1);
+
+    if (byId[0]) {
+      await db.update(channelsTable).set({
+        name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url,
+        categoryId, sourceReferer: "https://pluto.tv/", plutoTvRegion: region,
+      }).where(eq(channelsTable.plutoTvId, ch.plutoTvId));
+      updated++;
+      continue;
+    }
+
+    // 2. Try claim an orphan with same name that has no plutoTvId yet
+    //    (happens when M3U import ran before sync)
+    const orphan = await db.select().from(channelsTable)
+      .where(and(
+        eq(db.select().from(channelsTable).where(eq(channelsTable.name, ch.name)).as("x").name, ch.name),
+        sql`lower(${channelsTable.name}) = lower(${ch.name})`,
+        sql`${channelsTable.plutoTvId} IS NULL`,
+      )).limit(1);
+
+    if (orphan[0]) {
+      await db.update(channelsTable).set({
+        name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url, categoryId,
+        sourceType: "hls", sourceReferer: "https://pluto.tv/",
+        plutoTvId: ch.plutoTvId, plutoTvRegion: region,
+      }).where(eq(channelsTable.id, orphan[0].id));
+      updated++;
+      continue;
+    }
+
+    // 3. Insert new
+    await db.insert(channelsTable).values({
+      name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url, categoryId,
+      sourceType: "hls", sourceReferer: "https://pluto.tv/",
+      plutoTvId: ch.plutoTvId, plutoTvRegion: region, isLive: true,
+    });
+    added++;
+  }
+
+  // Remove channels from this region that are no longer in the playlist
+  const regionRows = await db.select({ id: channelsTable.id, plutoTvId: channelsTable.plutoTvId })
+    .from(channelsTable).where(eq(channelsTable.plutoTvRegion, region));
+  let removed = 0;
+  for (const row of regionRows) {
+    if (row.plutoTvId && !seenIds.has(row.plutoTvId)) {
+      await db.delete(channelsTable).where(eq(channelsTable.id, row.id));
+      removed++;
+    }
+  }
+
+  return { added, updated, removed, total: channels.length };
+}
+
+// ── One-shot cleanup: remove duplicate channels & empty categories ─────────────
+router.post("/admin/pluto/cleanup", requireAuth, requireAdmin, async (_req, res) => {
+  // 1. Find duplicate plutoTvIds — keep the oldest (first inserted), delete the rest
+  const all = await db.select({
+    id: channelsTable.id,
+    plutoTvId: channelsTable.plutoTvId,
+    createdAt: channelsTable.createdAt,
+  }).from(channelsTable).orderBy(channelsTable.createdAt);
+
+  const seenPlutoIds = new Map<string, string>(); // plutoTvId → kept id
+  const seenNames = new Map<string, string>();     // lower(name) → kept id
+  const toDelete: string[] = [];
+
+  for (const row of all) {
+    // Deduplicate by plutoTvId
+    if (row.plutoTvId) {
+      if (seenPlutoIds.has(row.plutoTvId)) {
+        toDelete.push(row.id); continue;
+      }
+      seenPlutoIds.set(row.plutoTvId, row.id);
+    }
+    // Deduplicate by name (case-insensitive) — only for Pluto channels
+    if (row.plutoTvId) {
+      const key = row.plutoTvId; // already keyed above
+    }
+  }
+
+  // Also find channels with same name (case-insensitive) and same plutoTvId
+  const nameGroups = new Map<string, string[]>();
+  for (const row of all) {
+    if (!row.plutoTvId) continue;
+    const key = `${row.plutoTvId}`;
+    if (!nameGroups.has(key)) nameGroups.set(key, []);
+    nameGroups.get(key)!.push(row.id);
+  }
+  for (const [, ids] of nameGroups) {
+    if (ids.length > 1) {
+      // Keep first, delete rest
+      ids.slice(1).forEach(id => { if (!toDelete.includes(id)) toDelete.push(id); });
+    }
+  }
+
+  let deleted = 0;
+  for (const id of toDelete) {
+    await db.delete(channelsTable).where(eq(channelsTable.id, id));
+    deleted++;
+  }
+
+  // 2. Remove empty categories (no channels reference them)
+  const allCats = await db.select({ id: categoriesTable.id }).from(categoriesTable);
+  let catsRemoved = 0;
+  for (const cat of allCats) {
+    const [count] = await db.select({ n: sql<number>`count(*)` })
+      .from(channelsTable).where(eq(channelsTable.categoryId, cat.id));
+    if ((count?.n ?? 0) === 0) {
+      await db.delete(categoriesTable).where(eq(categoriesTable.id, cat.id));
+      catsRemoved++;
+    }
+  }
+
+  res.json({ ok: true, duplicatesRemoved: deleted, emptyCategoriesRemoved: catsRemoved });
+});
+
+// Admin manual sync endpoint
+router.post("/admin/pluto/sync", requireAuth, requireAdmin, async (req, res) => {
+  const region = (String(req.query.region ?? "us").toLowerCase()) as PlutoRegion;
+  const githubUser = String(req.query.githubUser ?? "AF-Nexus");
+  if (!PLUTO_REGIONS.includes(region)) {
+    res.status(400).json({ error: `Unknown region. Must be one of: ${PLUTO_REGIONS.join(", ")}` }); return;
+  }
+  try {
+    const result = await runPlutoSync(region, githubUser);
+    res.json({ ok: true, region, ...result });
+  } catch (e: any) {
+    res.status(502).json({ error: e.message ?? "Sync failed" });
+  }
+});
+
+// Admin sync ALL regions
+router.post("/admin/pluto/sync-all", requireAuth, requireAdmin, async (req, res) => {
+  const githubUser = String(req.query.githubUser ?? "AF-Nexus");
+  const results: Record<string, unknown> = {};
+  for (const region of PLUTO_REGIONS) {
+    try { results[region] = await runPlutoSync(region, githubUser); }
+    catch (e: any) { results[region] = { error: e.message }; }
+  }
+  res.json({ ok: true, results });
+});
+
+// ── Public webhook — called by GitHub Actions after every push ───────────────
+// Set PLUTO_SYNC_SECRET env var on Render. Same value goes in GitHub → Secrets → SYNC_SECRET.
+router.post("/webhooks/pluto", async (req, res) => {
+  const secret = process.env.PLUTO_SYNC_SECRET;
+  if (secret) {
+    const provided = req.headers["x-sync-secret"] ?? req.query.secret;
+    if (provided !== secret) { res.status(401).json({ error: "Unauthorized" }); return; }
+  }
+  const region   = (String(req.query.region   ?? "us").toLowerCase()) as PlutoRegion;
+  const githubUser = String(req.query.githubUser ?? "AF-Nexus");
+  // Fire-and-forget — respond immediately so GitHub doesn't time out
+  res.json({ ok: true, status: "sync started", region });
+  try {
+    const result = await runPlutoSync(region, githubUser);
+    console.log(`[pluto-webhook] ${region} sync complete:`, result);
+  } catch (e) {
+    console.error("[pluto-webhook] sync failed:", e);
+  }
+});
+
+export default router;
