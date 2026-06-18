@@ -229,6 +229,15 @@ export default function Player() {
         setError("Your browser does not support HLS playback.");
       }
     } catch {
+      // Try auto-extracting fresh m3u8 from extractor URL before giving up
+      try {
+        const refreshRes = await fetch(`/api/stream/refresh/${id}`, { method: "POST" });
+        if (refreshRes.ok) {
+          // Retry with fresh URL — increment retryCount to re-trigger initPlayer
+          setRetryCount(c => c + 1);
+          return;
+        }
+      } catch {}
       setHealth("error");
       setError("Failed to load the stream. It may be offline.");
     }
@@ -364,30 +373,33 @@ export default function Player() {
                 </Button>
               </div>
             ) : embedUrl ? (
-              /* ── Embed player — CSS crop hides ads/chat, overlay blocks clicks ── */
-              <div ref={embedWrapperRef} className="relative w-full h-full group bg-black overflow-hidden">
-                {/* iframe is oversized — container clips it to show only the video */}
+              /* ── Embed player ──────────────────────────────────────────── */
+              <div
+                ref={embedWrapperRef}
+                className="relative w-full h-full group bg-black"
+                style={{ overflow: "hidden" }}
+              >
                 <iframe
                   src={embedUrl}
                   style={{
                     position: "absolute",
-                    top: "-60px",       /* crop top ad banner */
-                    left: "0",
-                    width: "calc(100% + 280px)",  /* extend right to crop chat sidebar */
-                    height: "calc(100% + 120px)", /* compensate for top + bottom crop */
+                    top: 0,
+                    left: 0,
+                    /* Extend right to crop chat/channel list sidebar */
+                    width: "calc(100% + 300px)",
+                    height: "100%",
                     border: "none",
                   }}
                   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                   allowFullScreen
                   referrerPolicy="no-referrer-when-downgrade"
+                  /* sandbox blocks popups + navigation away but lets user
+                     interact normally (close ads, unmute, etc.)
+                     Remove this line if the player refuses to load */
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-pointer-lock"
                   title={channel.name}
                 />
-                {/* Full transparent overlay — blocks ALL ad clicks */}
-                <div
-                  className="absolute inset-0 z-10"
-                  onContextMenu={e => e.preventDefault()}
-                />
-                {/* Fullscreen button above overlay */}
+                {/* Fullscreen button */}
                 <button
                   onClick={() => embedWrapperRef.current?.requestFullscreen?.()}
                   className="absolute bottom-3 right-3 z-20 bg-black/60 hover:bg-black/80 text-white p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
