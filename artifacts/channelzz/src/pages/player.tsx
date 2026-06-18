@@ -102,9 +102,11 @@ export default function Player() {
     try {
       const ticket = await requestPlayToken.mutateAsync({ id });
 
-      // ── Embed player (iframe) ─────────────────────────────────────────────
+      // ── Embed player (iframe via ad-stripping proxy) ─────────────────────
       if (ticket.type === "embed" && ticket.embedUrl) {
-        setEmbedUrl(ticket.embedUrl);
+        // Route through our proxy so ads/chat are stripped server-side
+        const encodedUrl = btoa(ticket.embedUrl).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+        setEmbedUrl(`/api/proxy/embed?url=${encodedUrl}`);
         setHealth("live");
         setIsPlaying(true);
         return;
@@ -364,21 +366,21 @@ export default function Player() {
                 </Button>
               </div>
             ) : embedUrl ? (
-              /* ── Embed / iframe player ───────────────────────────────── */
-              <div ref={embedWrapperRef} className="relative w-full h-full group">
+              /* ── Embed player via proxy — ads stripped, responsive ─────── */
+              <div ref={embedWrapperRef} className="relative w-full h-full group bg-black">
                 <iframe
                   src={embedUrl}
-                  className="w-full h-full border-0"
+                  className="absolute inset-0 w-full h-full border-0"
                   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  allowFullScreen
                   title={channel.name}
                 />
-                {/* ── Transparent overlay — blocks ALL ad clicks and iframe interaction ── */}
+                {/* Click blocker — stops any remaining ad clicks */}
                 <div
                   className="absolute inset-0 z-10"
-                  onContextMenu={(e) => e.preventDefault()}
+                  onContextMenu={e => e.preventDefault()}
                 />
-                {/* ── Fullscreen button sits above the overlay ── */}
+                {/* Fullscreen button above overlay */}
                 <button
                   onClick={() => embedWrapperRef.current?.requestFullscreen?.()}
                   className="absolute bottom-3 right-3 z-20 bg-black/60 hover:bg-black/80 text-white p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
