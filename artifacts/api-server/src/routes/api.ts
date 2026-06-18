@@ -201,7 +201,7 @@ router.delete("/categories/:id", requireAuth, requireAdmin, async (req, res) => 
 });
 
 router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
-  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; cdnChannelName?: string; isLive?: boolean };
+  const b = req.body as { name?: string; description?: string; categoryId?: string; logoUrl?: string; sourceUrl?: string; sourceType?: string; sourceReferer?: string; cdnChannelName?: string; sourceExtractorUrl?: string; isLive?: boolean };
   if (!b.name || !b.categoryId || !b.logoUrl || !b.sourceUrl) { res.status(400).json({ error: "Missing fields" }); return; }
   const sourceType = b.sourceType === "embed" ? "embed" : "hls";
   const [c] = await db.insert(channelsTable).values({
@@ -209,6 +209,7 @@ router.post("/channels", requireAuth, requireAdmin, async (req, res) => {
     logoUrl: b.logoUrl, sourceUrl: b.sourceUrl, sourceType,
     sourceReferer: b.sourceReferer ?? null,
     cdnChannelName: b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null,
+    sourceExtractorUrl: b.sourceExtractorUrl ?? null,
     isLive: b.isLive ?? true,
   }).returning();
   const [cat] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, c!.categoryId)).limit(1);
@@ -226,6 +227,7 @@ router.patch("/channels/:id", requireAuth, requireAdmin, async (req, res) => {
   if (b.sourceType !== undefined) update.sourceType = b.sourceType === "embed" ? "embed" : "hls";
   if (b.sourceReferer !== undefined) update.sourceReferer = b.sourceReferer || null;
   if (b.cdnChannelName !== undefined) update.cdnChannelName = b.cdnChannelName ? b.cdnChannelName.toLowerCase().trim() : null;
+  if (b.sourceExtractorUrl !== undefined) update.sourceExtractorUrl = b.sourceExtractorUrl || null;
   if (b.isLive !== undefined) update.isLive = b.isLive;
   const [c] = await db.update(channelsTable).set(update).where(eq(channelsTable.id, String(req.params.id))).returning();
   if (!c) { res.status(404).json({ error: "Not found" }); return; }
@@ -722,6 +724,99 @@ router.get("/proxy/embed", requireAuth, async (req: AuthedRequest, res: Response
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.send(html);
+});
+
+// ── Stream URL extractor — fetches embed page, pulls out fresh m3u8 token ────
+function extractM3u8(html: string, baseOrigin: string): string | null {
+  const patterns = [
+    /["']((https?:)?\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*?)["']/gi,
+    /(?:file|source|src|url|stream|hls)\s*[:=]\s*["']((https?:)?\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*?)["']/gi,
+  ];
+  for (const pat of patterns) {
+    const matches = [...html.matchAll(pat)];
+    if (matches.length > 0) {
+      let url = matches[0][1];
+      if (url.startsWith("//")) url = "https:" + url;
+      if (!url.startsWith("http")) url = baseOrigin + "/" + url.replace(/^\//, "");
+      return url;
+    }
+  }
+  return null;
+}
+
+router.post("/stream/refresh/:id", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const id = String(req.params.id);
+  if (!userHasAccess(req.userRow!)) { res.status(403).json({ error: "No access" }); return; }
+
+  const [ch] = await db.select().from(channelsTable).where(eq(channelsTable.id, id)).limit(1);
+  if (!ch) { res.status(404).json({ error: "Not found" }); return; }
+  if (!ch.sourceExtractorUrl) { res.status(400).json({ error: "No extractor URL configured" }); return; }
+
+  let extractorUrl = ch.sourceExtractorUrl;
+  if (extractorUrl.startsWith("//")) extractorUrl = "https:" + extractorUrl;
+
+  try {
+    const r = await fetch(extractorUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": new URL(extractorUrl).origin + "/",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(12000),
+      redirect: "follow",
+    });
+    if (!r.ok) { res.status(502).json({ error: `Page returned ${r.status}` }); return; }
+
+    const html = await r.text();
+    const origin = new URL(extractorUrl).origin;
+    const m3u8Url = extractM3u8(html, origin);
+
+    if (!m3u8Url) { res.status(404).json({ error: "No m3u8 found in page" }); return; }
+
+    // Save fresh URL so future plays use it instantly
+    await db.update(channelsTable)
+      .set({ sourceUrl: m3u8Url, sourceType: "hls", sourceReferer: origin + "/" })
+      .where(eq(channelsTable.id, id));
+
+    res.json({ ok: true, m3u8Url });
+  } catch (e: any) {
+    res.status(502).json({ error: e.message ?? "Extraction failed" });
+  }
+});
+
+// ── Favorites ─────────────────────────────────────────────────────────────────
+router.get("/favorites", requireAuth, async (req: AuthedRequest, res) => {
+  const rows = await db.select({ channelId: favoritesTable.channelId })
+    .from(favoritesTable).where(eq(favoritesTable.userId, req.userRow!.id));
+  res.json(rows.map(r => r.channelId));
+});
+
+router.post("/favorites/:channelId", requireAuth, async (req: AuthedRequest, res) => {
+  const channelId = String(req.params.channelId);
+  const userId = req.userRow!.id;
+  const existing = await db.select().from(favoritesTable)
+    .where(and(eq(favoritesTable.userId, userId), eq(favoritesTable.channelId, channelId))).limit(1);
+  if (existing[0]) {
+    await db.delete(favoritesTable)
+      .where(and(eq(favoritesTable.userId, userId), eq(favoritesTable.channelId, channelId)));
+    res.json({ favorited: false });
+  } else {
+    await db.insert(favoritesTable).values({ userId, channelId });
+    res.json({ favorited: true });
+  }
+});
+
+// ── User profile ──────────────────────────────────────────────────────────────
+router.patch("/user/profile", requireAuth, async (req: AuthedRequest, res) => {
+  const b = req.body as Partial<{ name: string; avatarUrl: string }>;
+  const update: Record<string, unknown> = {};
+  if (b.name !== undefined) update.name = b.name.trim() || null;
+  if (b.avatarUrl !== undefined) update.avatarUrl = b.avatarUrl.trim() || null;
+  if (Object.keys(update).length === 0) { res.json(req.userRow); return; }
+  await db.update(usersTable).set(update).where(eq(usersTable.id, req.userRow!.id));
+  const [updated] = await db.select().from(usersTable).where(eq(usersTable.id, req.userRow!.id)).limit(1);
+  res.json({ name: updated?.name, avatarUrl: updated?.avatarUrl });
 });
 
 export default router;
