@@ -70,9 +70,11 @@ export default function Player() {
   const { data: allChannels } = useListChannels();
   const requestPlayToken = useRequestPlayToken();
 
-  const [health,    setHealth]    = useState<Health>("connecting");
-  const [error,     setError]     = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
+  const [health,       setHealth]      = useState<Health>("connecting");
+  const [error,        setError]       = useState<string | null>(null);
+  const [retryCount,   setRetryCount]  = useState(0);
+  const [retryIn,      setRetryIn]     = useState<number | null>(null);
+  const autoRetryRef = useRef(0);
   const [qualities, setQualities] = useState<{ label: string; index: number }[]>([]);
   const [currentQ,  setCurrentQ]  = useState<number>(-1);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -157,7 +159,10 @@ export default function Player() {
         });
 
         // Only mark live when we actually start playing — not on every fragment
-        hls.on(Hls.Events.FRAG_PLAYING, () => setHealth("live"));
+        hls.on(Hls.Events.FRAG_PLAYING, () => {
+          setHealth("live");
+          autoRetryRef.current = 0; // reset retry counter on successful play
+        });
 
         // Debounce buffering state so brief stalls don't flicker the UI
         let bufferTimer: ReturnType<typeof setTimeout> | null = null;
@@ -171,12 +176,39 @@ export default function Player() {
 
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (!data.fatal) return;
+
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
             setHealth("buffering");
-            hls.startLoad();
-            retryRef.current = setTimeout(() => {
-              setRetryCount((c) => c + 1);
-            }, 5000);
+            hlsRef.current?.destroy();
+            hlsRef.current = null;
+            autoRetryRef.current += 1;
+
+            const MAX_AUTO = 6;
+            if (autoRetryRef.current > MAX_AUTO) {
+              // Give up — show error
+              setHealth("error");
+              setError("Stream unavailable. Tap retry to reconnect.");
+              setRetryIn(null);
+              autoRetryRef.current = 0;
+              return;
+            }
+
+            // Count down then re-run initPlayer — this re-requests the play token
+            // from the DB, picking up any fresh URL pushed by GitHub sync
+            const delay = Math.min(3 + autoRetryRef.current * 2, 12);
+            let countdown = delay;
+            setRetryIn(countdown);
+            const tick = setInterval(() => {
+              countdown -= 1;
+              setRetryIn(countdown);
+              if (countdown <= 0) {
+                clearInterval(tick);
+                setRetryIn(null);
+                // Full re-init: gets fresh play token & latest URL from DB
+                setRetryCount(c => c + 1);
+              }
+            }, 1000);
+
           } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
           } else {
@@ -209,6 +241,17 @@ export default function Player() {
       if (retryRef.current) clearTimeout(retryRef.current);
     };
   }, [initPlayer]);
+
+  // Auto-refresh stream every 30 minutes — picks up fresh Pluto TV tokens from DB after GitHub sync
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (health === "live") {
+        setAutoRetries(0);
+        setRetryCount(c => c + 1); // triggers initPlayer re-run via dependency
+      }
+    }, 30 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [health]);
 
   const switchQuality = (index: number) => {
     if (!hlsRef.current) return;
@@ -351,6 +394,13 @@ export default function Player() {
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 gap-3 pointer-events-none">
                     <Signal className="h-10 w-10 text-primary animate-pulse" />
                     <p className="text-white text-sm">Connecting to stream…</p>
+                  </div>
+                )}
+                {health === "buffering" && retryIn !== null && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 gap-3 pointer-events-none">
+                    <RefreshCw className="h-8 w-8 text-primary animate-spin" />
+                    <p className="text-white text-sm font-medium">Reconnecting in {retryIn}s…</p>
+                    <p className="text-white/60 text-xs">Getting latest stream URL</p>
                   </div>
                 )}
                 <video
