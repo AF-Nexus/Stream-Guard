@@ -1379,46 +1379,40 @@ function ImportTab() {
   };
 
   // ── Pluto TV state
-  const [plutoRegion, setPlutoRegion] = useState("us");
   const [plutoGithubUser, setPlutoGithubUser] = useState("AF-Nexus");
   const [plutoSyncing, setPlutoSyncing] = useState(false);
-  const [plutoSyncAll, setPlutoSyncAll] = useState(false);
+  const [plutoResetting, setPlutoResetting] = useState(false);
   const [plutoCleanup, setPlutoCleanup] = useState(false);
   const [plutoResult, setPlutoResult] = useState<Record<string, unknown> | null>(null);
-  const PLUTO_REGIONS = ["us", "uk", "ca", "de", "fr", "es", "it"];
 
-  const syncPluto = async (all = false) => {
-    all ? setPlutoSyncAll(true) : setPlutoSyncing(true);
+  const syncPluto = async () => {
+    setPlutoSyncing(true);
     setPlutoResult(null);
     try {
-      const url = all
-        ? `/api/admin/pluto/sync-all?githubUser=${plutoGithubUser}`
-        : `/api/admin/pluto/sync?region=${plutoRegion}&githubUser=${plutoGithubUser}`;
-      const r = await fetch(url, { method: "POST" });
+      const r = await fetch(`/api/admin/pluto/sync-uk-us?githubUser=${plutoGithubUser}`, { method: "POST" });
       const d = await r.json();
       setPlutoResult(d);
       queryClient.invalidateQueries({ queryKey: ["listChannels"] });
-      toast({ title: all ? "All regions synced!" : `${plutoRegion.toUpperCase()} synced!` });
+      queryClient.invalidateQueries({ queryKey: ["listCategories"] });
+      toast({ title: "US + UK synced!" });
     } catch (e: any) {
       toast({ title: "Sync failed", description: e.message, variant: "destructive" });
-    } finally {
-      all ? setPlutoSyncAll(false) : setPlutoSyncing(false);
-    }
+    } finally { setPlutoSyncing(false); }
   };
 
-  const runCleanup = async () => {
-    setPlutoCleanup(true);
+  const resetPluto = async () => {
+    if (!confirm("This will DELETE all Pluto TV channels and ALL categories, then re-create 7 clean categories. Continue?")) return;
+    setPlutoResetting(true);
     try {
-      const r = await fetch("/api/admin/pluto/cleanup", { method: "POST" });
-      const d = await r.json() as { duplicatesRemoved: number; emptyCategoriesRemoved: number };
+      const r = await fetch("/api/admin/pluto/reset", { method: "POST" });
+      const d = await r.json();
       queryClient.invalidateQueries({ queryKey: ["listChannels"] });
       queryClient.invalidateQueries({ queryKey: ["listCategories"] });
-      toast({ title: `Cleanup done — ${d.duplicatesRemoved} duplicates removed, ${d.emptyCategoriesRemoved} empty categories removed` });
+      toast({ title: "Reset done! Now run Sync US + UK." });
+      setPlutoResult(d);
     } catch (e: any) {
-      toast({ title: "Cleanup failed", description: e.message, variant: "destructive" });
-    } finally {
-      setPlutoCleanup(false);
-    }
+      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+    } finally { setPlutoResetting(false); }
   };
   const StatusBadge = ({ status }: { status: "idle"|"testing"|"ok"|"fail" }) => {
     if (status === "idle") return null;
@@ -1748,76 +1742,48 @@ function ImportTab() {
               <RefreshCw className="h-5 w-5 text-primary" /> Pluto TV Auto-Sync
             </CardTitle>
             <CardDescription>
-              Pulls the latest M3U from your <strong>Pluto-TV-Playlists</strong> GitHub repo.
-              Channels are upserted — name, logo and URL always stay current. Removed channels are deleted.
-              Channels without a group go into <strong>Random</strong>.
-              GitHub Actions calls your Render webhook every hour automatically.
+              Syncs <strong>US + UK</strong> channels from your GitHub repo into exactly <strong>7 categories</strong>: Movies, Sports, News, Entertainment, Kids, Music, Random.
+              GitHub Actions triggers this automatically on every push.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">GitHub Username</label>
-                <Input value={plutoGithubUser} onChange={e => setPlutoGithubUser(e.target.value)} placeholder="AF-Nexus" />
-                <p className="text-xs text-muted-foreground">Owner of your Pluto-TV-Playlists fork</p>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Region</label>
-                <Select value={plutoRegion} onValueChange={setPlutoRegion}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {PLUTO_REGIONS.map(r => <SelectItem key={r} value={r}>{r.toUpperCase()}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">GitHub Username</label>
+              <Input value={plutoGithubUser} onChange={e => setPlutoGithubUser(e.target.value)} placeholder="AF-Nexus" className="max-w-xs" />
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <Button onClick={() => syncPluto(false)} disabled={plutoSyncing || plutoSyncAll} className="gap-2">
+              <Button onClick={syncPluto} disabled={plutoSyncing || plutoResetting} className="gap-2">
                 {plutoSyncing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Sync {plutoRegion.toUpperCase()} Now
+                Sync US + UK Now
               </Button>
-              <Button variant="outline" onClick={() => syncPluto(true)} disabled={plutoSyncing || plutoSyncAll} className="gap-2">
-                {plutoSyncAll ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
-                Sync All 7 Regions
-              </Button>
-              <Button variant="destructive" onClick={runCleanup} disabled={plutoCleanup} className="gap-2" title="Remove duplicate channels and empty categories">
-                {plutoCleanup ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                Fix Duplicates &amp; Empty Cats
+              <Button variant="destructive" onClick={resetPluto} disabled={plutoSyncing || plutoResetting} className="gap-2">
+                {plutoResetting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                ⚠️ Reset Everything
               </Button>
             </div>
 
             {plutoResult && (
               <div className="p-3 rounded-lg bg-muted/50 border border-border text-sm space-y-1">
-                <p className="font-semibold">Sync Result</p>
-                {(plutoResult as any).results ? (
+                <p className="font-semibold">Result</p>
+                {(plutoResult as any).message ? (
+                  <p className="text-muted-foreground text-xs">✅ {(plutoResult as any).message}</p>
+                ) : (plutoResult as any).results ? (
                   Object.entries((plutoResult as any).results as Record<string, unknown>).map(([reg, res]: [string, unknown]) => (
                     <p key={reg} className="text-muted-foreground font-mono text-xs">
                       <span className="font-bold text-foreground uppercase">{reg}</span>:{" "}
-                      {(res as any).error
-                        ? `❌ ${(res as any).error}`
-                        : `✅ +${(res as any).added} added · ~${(res as any).updated} updated · -${(res as any).removed} removed`}
+                      {(res as any).error ? `❌ ${(res as any).error}` : `✅ +${(res as any).added} added · ~${(res as any).updated} updated · -${(res as any).removed} removed`}
                     </p>
                   ))
-                ) : (
-                  <p className="text-muted-foreground font-mono text-xs">
-                    {(plutoResult as any).error
-                      ? `❌ ${(plutoResult as any).error}`
-                      : `✅ +${(plutoResult as any).added} added · ~${(plutoResult as any).updated} updated · -${(plutoResult as any).removed} removed (${(plutoResult as any).total} total)`}
-                  </p>
-                )}
+                ) : null}
               </div>
             )}
 
-            <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2">
-              <p className="font-semibold text-yellow-700 dark:text-yellow-400 text-sm">⚡ Auto-Sync Setup (one-time)</p>
-              <ol className="text-xs text-muted-foreground space-y-1 list-decimal ml-4">
-                <li>In <strong>Render → Environment</strong>, add: <code className="bg-muted px-1 rounded">PLUTO_SYNC_SECRET=your-secret-here</code></li>
-                <li>In <strong>GitHub repo → Settings → Secrets → Actions</strong>, add:<br />
-                  <code className="bg-muted px-1 rounded">SYNC_SECRET=same-secret</code> and <code className="bg-muted px-1 rounded">RENDER_URL=https://your-app.onrender.com</code>
-                </li>
-                <li>Replace <code className="bg-muted px-1 rounded">.github/workflows/auto.yml</code> with the provided workflow file.</li>
-              </ol>
+            <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 space-y-2 text-xs text-muted-foreground">
+              <p className="font-semibold text-blue-600 dark:text-blue-400">⚡ First time setup</p>
+              <p>1. Click <strong>Reset Everything</strong> — clears all old channels and categories</p>
+              <p>2. Click <strong>Sync US + UK Now</strong> — imports fresh channels into 7 clean categories</p>
+              <p>3. After that, GitHub Actions handles it automatically on every playlist update</p>
             </div>
           </CardContent>
         </Card>
