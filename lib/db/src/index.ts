@@ -81,6 +81,7 @@ const migrations = [
   "ALTER TABLE channels ADD COLUMN cdn_channel_name TEXT",
   "ALTER TABLE channels ADD COLUMN pluto_tv_id TEXT",
   "ALTER TABLE channels ADD COLUMN pluto_tv_region TEXT",
+  "ALTER TABLE channels ADD COLUMN source_extractor_url TEXT",
   "ALTER TABLE users ADD COLUMN reset_token TEXT",
   "ALTER TABLE users ADD COLUMN reset_token_expires_at INTEGER",
 ];
