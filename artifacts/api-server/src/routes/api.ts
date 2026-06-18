@@ -609,4 +609,119 @@ router.post("/webhooks/pluto", async (req, res) => {
   })();
 });
 
+// ── Embed proxy — fetches third-party player page, strips ads + chat, returns clean HTML ──
+router.get("/proxy/embed", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const raw = req.query.url as string | undefined;
+  if (!raw) { res.status(400).send("Missing url"); return; }
+
+  let targetUrl: string;
+  try {
+    targetUrl = Buffer.from(raw, "base64url").toString("utf8");
+    new URL(targetUrl); // validate
+  } catch { res.status(400).send("Invalid url"); return; }
+
+  let html: string;
+  try {
+    const r = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": new URL(targetUrl).origin + "/",
+        "Origin": new URL(targetUrl).origin,
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+      redirect: "follow",
+    });
+    if (!r.ok) { res.status(502).send(`Upstream returned ${r.status}`); return; }
+    html = await r.text();
+  } catch (e: any) {
+    res.status(502).send(`Fetch failed: ${e.message}`);
+    return;
+  }
+
+  const origin = new URL(targetUrl).origin;
+
+  // Injected at the very top of <head> — runs before any page scripts
+  const headInjection = `
+<base href="${origin}/">
+<style>
+  /* ── Reset ── */
+  html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;width:100%!important;height:100%!important;}
+
+  /* ── Hide ads ── */
+  .ad,.ads,.advert,.advertisement,.adsense,.ad-unit,.ad-slot,.ad-banner,
+  [id^="ad"],[id*="-ad"],[id*="_ad"],[id*="AdSlot"],[id*="adSlot"],
+  [class^="ad-"],[class*="-ad-"],[class*="_ad_"],[class*="banner-ad"],
+  ins.adsbygoogle,.dfp-ad,.gpt-ad,.pub-ad,
+  [id*="google_ads"],[id*="div-gpt"],[id*="dfp"],[id*="adsense"],
+  [data-ad],[data-ad-unit],[data-adunit],
+  /* ── Hide chat/social sidebars ── */
+  .chat,.livechat,.chat-box,.chat-container,.chat-wrapper,.chat-panel,
+  [id*="chat"],[class*="chat"],[id*="Chat"],[class*="Chat"],
+  .sidebar,.social,.comments,.comment-box,[class*="sidebar"],
+  /* ── Hide popups/overlays ── */
+  .popup,.modal,.overlay-ad,.ad-overlay,.toast,
+  [id*="popup"],[id*="modal"],[class*="popup"],
+  /* ── Hide page nav/header/footer (keep player controls) ── */
+  body>header,body>nav,body>footer,
+  .site-header,.site-footer,.page-header,.page-footer,
+  .navbar,.topbar,.bottombar,
+  /* ── Ad network iframes ── */
+  iframe[src*="doubleclick"],iframe[src*="googlesyndication"],
+  iframe[src*="adnxs"],iframe[src*="moatads"],
+  iframe[src*="amazon-adsystem"],iframe[src*="openx"],
+  iframe[src*="pubmatic"],iframe[src*="rubiconproject"],
+  iframe[src*="taboola"],iframe[src*="outbrain"],
+  iframe[src*="ads."],iframe[src*=".ads."] {
+    display:none!important;
+    visibility:hidden!important;
+    opacity:0!important;
+    pointer-events:none!important;
+    width:0!important;height:0!important;
+  }
+
+  /* ── Make video + player fill the view ── */
+  video{width:100%!important;height:100%!important;max-width:100%!important;object-fit:contain;background:#000;}
+  .player,.video-player,.player-wrapper,.video-wrapper,
+  [class*="player"],[id*="player"],
+  [class*="video-container"],[id*="video-container"] {
+    width:100%!important;height:100%!important;max-width:100%!important;
+  }
+</style>
+<script>
+  // Block popup windows
+  window.open = () => null;
+
+  // Stub common ad libraries before they load
+  window.googletag = { cmd: { push: f => { try { f(); } catch {} } }, defineSlot: () => ({ addService: () => ({}) }), pubads: () => ({ enableSingleRequest: () => {}, refresh: () => {}, addEventListener: () => {} }), enableServices: () => {}, display: () => {} };
+  window.adsbygoogle = [];
+  Object.defineProperty(window, 'adsbygoogle', { get: () => [], set: () => {} });
+  window.__tcfapi = () => {};
+  window._gaq = [];
+
+  // Remove ad iframes that load after DOMContentLoaded
+  const adSelectors = 'iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="adnxs"],iframe[src*="amazon-adsystem"],iframe[src*="taboola"],iframe[src*="outbrain"],.ad,.ads,[id^="ad"],[class*="banner-ad"]';
+  const purgeAds = () => document.querySelectorAll(adSelectors).forEach(el => el.remove());
+  document.addEventListener('DOMContentLoaded', purgeAds);
+  setInterval(purgeAds, 800);
+</script>`;
+
+  // Inject into <head> if it exists, otherwise prepend
+  if (html.includes("<head>")) {
+    html = html.replace("<head>", "<head>" + headInjection);
+  } else if (html.includes("<HEAD>")) {
+    html = html.replace("<HEAD>", "<HEAD>" + headInjection);
+  } else {
+    html = headInjection + html;
+  }
+
+  // Strip X-Frame-Options from the proxied response so it can be embedded
+  res.removeHeader("X-Frame-Options");
+  res.removeHeader("Content-Security-Policy");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.send(html);
+});
+
 export default router;
