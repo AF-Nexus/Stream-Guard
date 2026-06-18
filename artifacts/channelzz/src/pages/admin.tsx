@@ -198,6 +198,7 @@ const channelSchema = z.object({
   sourceUrl: z.string().url("Must be a valid URL"),
   sourceReferer: z.string().optional(),
   cdnChannelName: z.string().optional(),
+  sourceExtractorUrl: z.string().optional(),
   isLive: z.boolean().default(false),
 });
 
@@ -215,12 +216,12 @@ function ChannelsTab() {
 
   const form = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", sourceExtractorUrl: "", isLive: false },
   });
 
   const editForm = useForm<z.infer<typeof channelSchema>>({
     resolver: zodResolver(channelSchema),
-    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", isLive: false },
+    defaultValues: { name: "", description: "", categoryId: "", logoUrl: "", sourceType: "hls", sourceUrl: "", sourceReferer: "", cdnChannelName: "", sourceExtractorUrl: "", isLive: false },
   });
 
   // Populate edit form when a channel is selected
@@ -339,14 +340,24 @@ function ChannelsTab() {
                 )} />
 
                 {form.watch("sourceType") === "hls" && (
-                  <FormField control={form.control} name="sourceReferer" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
-                      <FormControl><Input placeholder="https://cdnlivetv.tv/" {...field} /></FormControl>
-                      <FormDescription>Required for token-protected CDN streams.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
+                  <>
+                    <FormField control={form.control} name="sourceReferer" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                        <FormControl><Input placeholder="https://streamcrichd.com/" {...field} /></FormControl>
+                        <FormDescription>Required for token-protected CDN streams.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={form.control} name="sourceExtractorUrl" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Auto-Extract URL <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                        <FormControl><Input placeholder="https://streamcrichd.com/update/fetch.php?hd=22" {...field} /></FormControl>
+                        <FormDescription>Embed page URL — server auto-fetches a fresh m3u8 when token expires.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </>
                 )}
 
                 <FormField control={form.control} name="cdnChannelName" render={({ field }) => (
@@ -446,14 +457,24 @@ function ChannelsTab() {
                   </FormItem>
                 )} />
                 {editForm.watch("sourceType") === "hls" && (
-                  <FormField control={editForm.control} name="sourceReferer" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
-                      <FormControl><Input placeholder="https://cdnlivetv.tv/" {...field} /></FormControl>
-                      <FormDescription>Required for token-protected CDN streams.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
+                  <>
+                    <FormField control={editForm.control} name="sourceReferer" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Referer Header <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                        <FormControl><Input placeholder="https://streamcrichd.com/" {...field} /></FormControl>
+                        <FormDescription>Required for token-protected CDN streams.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={editForm.control} name="sourceExtractorUrl" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Auto-Extract URL <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                        <FormControl><Input placeholder="https://streamcrichd.com/update/fetch.php?hd=22" {...field} /></FormControl>
+                        <FormDescription>Embed page URL — server auto-fetches a fresh m3u8 when token expires.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </>
                 )}
                 <FormField control={editForm.control} name="cdnChannelName" render={({ field }) => (
                   <FormItem>
