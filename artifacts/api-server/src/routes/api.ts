@@ -427,40 +427,33 @@ router.get("/admin/fetch-m3u", requireAuth, requireAdmin, async (req, res) => {
 const PLUTO_REGIONS = ["us", "uk", "ca", "de", "fr", "es", "it"] as const;
 type PlutoRegion = typeof PLUTO_REGIONS[number];
 
-// Map Pluto's 30+ group-titles down to ~8 sensible categories
+// The ONLY 7 categories that will ever exist from Pluto TV
+const FIXED_CATEGORIES = ["Movies", "Sports", "News", "Entertainment", "Kids", "Music", "Random"] as const;
+
 const PLUTO_CATEGORY_MAP: Record<string, string> = {
-  // Movies
   "movies": "Movies", "action movies": "Movies", "horror movies": "Movies",
   "comedy movies": "Movies", "drama movies": "Movies", "thriller movies": "Movies",
   "sci-fi movies": "Movies", "romance movies": "Movies", "animated movies": "Movies",
   "family movies": "Movies", "western movies": "Movies", "documentary movies": "Movies",
   "classic movies": "Movies", "indie movies": "Movies", "crime movies": "Movies",
-  // Sports
+  "anime": "Movies",
   "sports": "Sports", "sports & fitness": "Sports", "football": "Sports",
   "soccer": "Sports", "basketball": "Sports", "combat sports": "Sports",
-  // News
-  "news": "News", "news & opinion": "News", "world news": "News", "business news": "News",
-  // Entertainment
+  "news": "News", "news & opinion": "News", "world news": "News",
+  "business news": "News", "weather": "News",
   "entertainment": "Entertainment", "reality & docs": "Entertainment",
-  "reality tv": "Entertainment", "talk shows": "Entertainment", "awards shows": "Entertainment",
-  "game shows": "Entertainment",
-  // Music
-  "music": "Music", "music videos": "Music",
-  // Kids
+  "reality tv": "Entertainment", "talk shows": "Entertainment",
+  "game shows": "Entertainment", "comedy": "Entertainment", "drama": "Entertainment",
+  "documentaries": "Entertainment", "true crime": "Entertainment",
+  "science": "Entertainment", "nature": "Entertainment",
+  "arts & culture": "Entertainment", "lifestyle": "Entertainment",
+  "food": "Entertainment", "travel": "Entertainment", "technology": "Entertainment",
+  "music": "Music", "music videos": "Music", "radio": "Music",
   "kids": "Kids", "kids & family": "Kids", "cartoons": "Kids",
-  // Lifestyle
-  "lifestyle": "Lifestyle", "food": "Lifestyle", "travel": "Lifestyle",
-  "home & garden": "Lifestyle", "fashion": "Lifestyle", "health & wellness": "Lifestyle",
-  // Tech / Science
-  "technology": "Lifestyle", "science": "Lifestyle", "nature": "Lifestyle",
-  // Culture & Arts
-  "arts & culture": "Entertainment", "spanish": "Entertainment",
-  "hispanic": "Entertainment", "lgbtq+": "Entertainment",
 };
 
 function mapPlutoGroup(group: string): string {
-  if (!group) return "Random";
-  return PLUTO_CATEGORY_MAP[group.toLowerCase()] ?? group; // keep original if no mapping
+  return PLUTO_CATEGORY_MAP[group.toLowerCase().trim()] ?? "Random";
 }
 
 function plutoRawUrl(region: PlutoRegion, githubUser = "AF-Nexus") {
@@ -469,8 +462,7 @@ function plutoRawUrl(region: PlutoRegion, githubUser = "AF-Nexus") {
 
 function parsePlutoM3U(text: string) {
   const lines = text.split(/\r?\n/);
-  type Entry = { plutoTvId: string; name: string; logo: string; group: string; url: string };
-  const results: Entry[] = [];
+  const results: { plutoTvId: string; name: string; logo: string; group: string; url: string }[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line.startsWith("#EXTINF")) continue;
@@ -486,81 +478,65 @@ function parsePlutoM3U(text: string) {
   return results;
 }
 
-// Core sync — upserts by plutoTvId, claims orphans by name, removes stale
+// Seed the 7 fixed categories — idempotent, safe to call anytime
+async function ensureFixedCategories() {
+  const catMap = new Map<string, string>(); // name → id
+  for (const name of FIXED_CATEGORIES) {
+    const slug = name.toLowerCase();
+    const existing = await db.select().from(categoriesTable).where(eq(categoriesTable.slug, slug)).limit(1);
+    if (existing[0]) {
+      catMap.set(name, existing[0].id);
+    } else {
+      const [c] = await db.insert(categoriesTable).values({ name, slug }).returning();
+      catMap.set(name, c!.id);
+    }
+  }
+  return catMap;
+}
+
+// Core sync — US or UK only, fixed categories, no auto-creation
 async function runPlutoSync(region: PlutoRegion, githubUser = "AF-Nexus") {
-  const { like, or } = await import("drizzle-orm");
   const rawUrl = plutoRawUrl(region, githubUser);
   const r = await fetch(rawUrl, {
     headers: { "User-Agent": "Mozilla/5.0", Accept: "text/plain" },
     signal: AbortSignal.timeout(20000),
   });
-  if (!r.ok) throw new Error(`GitHub returned ${r.status}`);
+  if (!r.ok) throw new Error(`GitHub returned ${r.status} for ${rawUrl}`);
   const text = await r.text();
   const channels = parsePlutoM3U(text);
-  if (channels.length === 0) throw new Error("Parsed 0 channels — aborting to avoid data loss");
+  if (channels.length === 0) throw new Error("Parsed 0 channels — aborting to avoid wiping data");
 
-  // Category cache
-  const catCache = new Map<string, string>();
-  async function getOrCreateCategory(name: string) {
-    const key = name || "Random";
-    if (catCache.has(key)) return catCache.get(key)!;
-    const slug = slugify(key) || "random";
-    const existing = await db.select().from(categoriesTable).where(eq(categoriesTable.slug, slug)).limit(1);
-    if (existing[0]) { catCache.set(key, existing[0].id); return existing[0].id; }
-    const [created] = await db.insert(categoriesTable).values({ name: key, slug }).returning();
-    catCache.set(key, created!.id);
-    return created!.id;
-  }
+  // Load category map — only ever 7 fixed ones
+  const catMap = await ensureFixedCategories();
 
   let added = 0, updated = 0;
   const seenIds = new Set<string>();
 
   for (const ch of channels) {
     seenIds.add(ch.plutoTvId);
-    const categoryId = await getOrCreateCategory(ch.group);
+    const categoryId = catMap.get(ch.group) ?? catMap.get("Random")!;
 
-    // 1. Try match by plutoTvId (exact — fastest path)
-    const byId = await db.select().from(channelsTable)
-      .where(eq(channelsTable.plutoTvId, ch.plutoTvId)).limit(1);
+    // Match by plutoTvId
+    const existing = await db.select({ id: channelsTable.id })
+      .from(channelsTable).where(eq(channelsTable.plutoTvId, ch.plutoTvId)).limit(1);
 
-    if (byId[0]) {
+    if (existing[0]) {
       await db.update(channelsTable).set({
         name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url,
         categoryId, sourceReferer: "https://pluto.tv/", plutoTvRegion: region,
-      }).where(eq(channelsTable.plutoTvId, ch.plutoTvId));
+      }).where(eq(channelsTable.id, existing[0].id));
       updated++;
-      continue;
-    }
-
-    // 2. Try claim an orphan with same name that has no plutoTvId yet
-    //    (happens when M3U import ran before sync)
-    const orphan = await db.select().from(channelsTable)
-      .where(and(
-        eq(db.select().from(channelsTable).where(eq(channelsTable.name, ch.name)).as("x").name, ch.name),
-        sql`lower(${channelsTable.name}) = lower(${ch.name})`,
-        sql`${channelsTable.plutoTvId} IS NULL`,
-      )).limit(1);
-
-    if (orphan[0]) {
-      await db.update(channelsTable).set({
+    } else {
+      await db.insert(channelsTable).values({
         name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url, categoryId,
         sourceType: "hls", sourceReferer: "https://pluto.tv/",
-        plutoTvId: ch.plutoTvId, plutoTvRegion: region,
-      }).where(eq(channelsTable.id, orphan[0].id));
-      updated++;
-      continue;
+        plutoTvId: ch.plutoTvId, plutoTvRegion: region, isLive: true,
+      });
+      added++;
     }
-
-    // 3. Insert new
-    await db.insert(channelsTable).values({
-      name: ch.name, logoUrl: ch.logo, sourceUrl: ch.url, categoryId,
-      sourceType: "hls", sourceReferer: "https://pluto.tv/",
-      plutoTvId: ch.plutoTvId, plutoTvRegion: region, isLive: true,
-    });
-    added++;
   }
 
-  // Remove channels from this region that are no longer in the playlist
+  // Remove channels from this region no longer in playlist
   const regionRows = await db.select({ id: channelsTable.id, plutoTvId: channelsTable.plutoTvId })
     .from(channelsTable).where(eq(channelsTable.plutoTvRegion, region));
   let removed = 0;
@@ -574,75 +550,23 @@ async function runPlutoSync(region: PlutoRegion, githubUser = "AF-Nexus") {
   return { added, updated, removed, total: channels.length };
 }
 
-// ── One-shot cleanup: remove duplicate channels & empty categories ─────────────
-router.post("/admin/pluto/cleanup", requireAuth, requireAdmin, async (_req, res) => {
-  // 1. Find duplicate plutoTvIds — keep the oldest (first inserted), delete the rest
-  const all = await db.select({
-    id: channelsTable.id,
-    plutoTvId: channelsTable.plutoTvId,
-    createdAt: channelsTable.createdAt,
-  }).from(channelsTable).orderBy(channelsTable.createdAt);
-
-  const seenPlutoIds = new Map<string, string>(); // plutoTvId → kept id
-  const seenNames = new Map<string, string>();     // lower(name) → kept id
-  const toDelete: string[] = [];
-
-  for (const row of all) {
-    // Deduplicate by plutoTvId
-    if (row.plutoTvId) {
-      if (seenPlutoIds.has(row.plutoTvId)) {
-        toDelete.push(row.id); continue;
-      }
-      seenPlutoIds.set(row.plutoTvId, row.id);
-    }
-    // Deduplicate by name (case-insensitive) — only for Pluto channels
-    if (row.plutoTvId) {
-      const key = row.plutoTvId; // already keyed above
-    }
-  }
-
-  // Also find channels with same name (case-insensitive) and same plutoTvId
-  const nameGroups = new Map<string, string[]>();
-  for (const row of all) {
-    if (!row.plutoTvId) continue;
-    const key = `${row.plutoTvId}`;
-    if (!nameGroups.has(key)) nameGroups.set(key, []);
-    nameGroups.get(key)!.push(row.id);
-  }
-  for (const [, ids] of nameGroups) {
-    if (ids.length > 1) {
-      // Keep first, delete rest
-      ids.slice(1).forEach(id => { if (!toDelete.includes(id)) toDelete.push(id); });
-    }
-  }
-
-  let deleted = 0;
-  for (const id of toDelete) {
-    await db.delete(channelsTable).where(eq(channelsTable.id, id));
-    deleted++;
-  }
-
-  // 2. Remove empty categories (no channels reference them)
-  const allCats = await db.select({ id: categoriesTable.id }).from(categoriesTable);
-  let catsRemoved = 0;
-  for (const cat of allCats) {
-    const [count] = await db.select({ n: sql<number>`count(*)` })
-      .from(channelsTable).where(eq(channelsTable.categoryId, cat.id));
-    if ((count?.n ?? 0) === 0) {
-      await db.delete(categoriesTable).where(eq(categoriesTable.id, cat.id));
-      catsRemoved++;
-    }
-  }
-
-  res.json({ ok: true, duplicatesRemoved: deleted, emptyCategoriesRemoved: catsRemoved });
+// ── NUCLEAR RESET — wipes ALL Pluto channels + ALL categories, seeds 7 clean ones ──
+router.post("/admin/pluto/reset", requireAuth, requireAdmin, async (_req, res) => {
+  // Delete every channel that came from Pluto TV
+  await db.delete(channelsTable).where(sql`${channelsTable.plutoTvId} IS NOT NULL`);
+  // Wipe all categories
+  await db.delete(categoriesTable);
+  // Seed the 7 fixed ones
+  const catMap = await ensureFixedCategories();
+  res.json({ ok: true, categories: [...catMap.keys()], message: "Reset done. Now sync US + UK." });
 });
 
-// Admin manual sync endpoint
+// ── Manual sync — single region ───────────────────────────────────────────────
 router.post("/admin/pluto/sync", requireAuth, requireAdmin, async (req, res) => {
-  const region = (String(req.query.region ?? "us").toLowerCase()) as PlutoRegion;
+  const region = String(req.query.region ?? "us").toLowerCase() as PlutoRegion;
   const githubUser = String(req.query.githubUser ?? "AF-Nexus");
   if (!PLUTO_REGIONS.includes(region)) {
-    res.status(400).json({ error: `Unknown region. Must be one of: ${PLUTO_REGIONS.join(", ")}` }); return;
+    res.status(400).json({ error: `Unknown region. Use: ${PLUTO_REGIONS.join(", ")}` }); return;
   }
   try {
     const result = await runPlutoSync(region, githubUser);
@@ -652,35 +576,37 @@ router.post("/admin/pluto/sync", requireAuth, requireAdmin, async (req, res) => 
   }
 });
 
-// Admin sync ALL regions
-router.post("/admin/pluto/sync-all", requireAuth, requireAdmin, async (req, res) => {
+// ── Sync US + UK — the main button ───────────────────────────────────────────
+router.post("/admin/pluto/sync-uk-us", requireAuth, requireAdmin, async (req, res) => {
   const githubUser = String(req.query.githubUser ?? "AF-Nexus");
   const results: Record<string, unknown> = {};
-  for (const region of PLUTO_REGIONS) {
+  for (const region of ["us", "uk"] as PlutoRegion[]) {
     try { results[region] = await runPlutoSync(region, githubUser); }
     catch (e: any) { results[region] = { error: e.message }; }
   }
   res.json({ ok: true, results });
 });
 
-// ── Public webhook — called by GitHub Actions after every push ───────────────
-// Set PLUTO_SYNC_SECRET env var on Render. Same value goes in GitHub → Secrets → SYNC_SECRET.
+// ── Webhook — called by GitHub Actions automatically after every push ─────────
 router.post("/webhooks/pluto", async (req, res) => {
   const secret = process.env.PLUTO_SYNC_SECRET;
   if (secret) {
     const provided = req.headers["x-sync-secret"] ?? req.query.secret;
     if (provided !== secret) { res.status(401).json({ error: "Unauthorized" }); return; }
   }
-  const region   = (String(req.query.region   ?? "us").toLowerCase()) as PlutoRegion;
   const githubUser = String(req.query.githubUser ?? "AF-Nexus");
-  // Fire-and-forget — respond immediately so GitHub doesn't time out
-  res.json({ ok: true, status: "sync started", region });
-  try {
-    const result = await runPlutoSync(region, githubUser);
-    console.log(`[pluto-webhook] ${region} sync complete:`, result);
-  } catch (e) {
-    console.error("[pluto-webhook] sync failed:", e);
-  }
+  res.json({ ok: true, status: "sync started", regions: ["us", "uk"] });
+  // Fire-and-forget — always US + UK only
+  (async () => {
+    for (const region of ["us", "uk"] as PlutoRegion[]) {
+      try {
+        const r = await runPlutoSync(region, githubUser);
+        console.log(`[pluto-webhook] ${region}:`, r);
+      } catch (e) {
+        console.error(`[pluto-webhook] ${region} failed:`, e);
+      }
+    }
+  })();
 });
 
 export default router;
