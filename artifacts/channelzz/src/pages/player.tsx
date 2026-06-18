@@ -102,11 +102,9 @@ export default function Player() {
     try {
       const ticket = await requestPlayToken.mutateAsync({ id });
 
-      // ── Embed player (iframe via ad-stripping proxy) ─────────────────────
+      // ── Embed player (iframe) ─────────────────────────────────────────────
       if (ticket.type === "embed" && ticket.embedUrl) {
-        // Route through our proxy so ads/chat are stripped server-side
-        const encodedUrl = btoa(ticket.embedUrl).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-        setEmbedUrl(`/api/proxy/embed?url=${encodedUrl}`);
+        setEmbedUrl(ticket.embedUrl);
         setHealth("live");
         setIsPlaying(true);
         return;
@@ -366,16 +364,25 @@ export default function Player() {
                 </Button>
               </div>
             ) : embedUrl ? (
-              /* ── Embed player via proxy — ads stripped, responsive ─────── */
-              <div ref={embedWrapperRef} className="relative w-full h-full group bg-black">
+              /* ── Embed player — CSS crop hides ads/chat, overlay blocks clicks ── */
+              <div ref={embedWrapperRef} className="relative w-full h-full group bg-black overflow-hidden">
+                {/* iframe is oversized — container clips it to show only the video */}
                 <iframe
                   src={embedUrl}
-                  className="absolute inset-0 w-full h-full border-0"
+                  style={{
+                    position: "absolute",
+                    top: "-60px",       /* crop top ad banner */
+                    left: "0",
+                    width: "calc(100% + 280px)",  /* extend right to crop chat sidebar */
+                    height: "calc(100% + 120px)", /* compensate for top + bottom crop */
+                    border: "none",
+                  }}
                   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                   allowFullScreen
+                  referrerPolicy="no-referrer-when-downgrade"
                   title={channel.name}
                 />
-                {/* Click blocker — stops any remaining ad clicks */}
+                {/* Full transparent overlay — blocks ALL ad clicks */}
                 <div
                   className="absolute inset-0 z-10"
                   onContextMenu={e => e.preventDefault()}
