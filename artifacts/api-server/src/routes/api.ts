@@ -819,4 +819,83 @@ router.patch("/user/profile", requireAuth, async (req: AuthedRequest, res) => {
   res.json({ name: updated?.name, avatarUrl: updated?.avatarUrl });
 });
 
+// ── SportSRC V2 Proxy — keeps API keys server-side ───────────────────────────
+// Set these env vars on Render:
+//   SPORTSRC_KEY_1=f4a9e596beb6bbbfebba0e1092d96683
+//   SPORTSRC_KEY_2=917554c47d1fb5fb0686e019cb30e04f
+
+let _keyIdx = 0;
+function getSportsrcKey(): string {
+  const keys = [
+    process.env.SPORTSRC_KEY_1,
+    process.env.SPORTSRC_KEY_2,
+  ].filter(Boolean) as string[];
+  if (keys.length === 0) return "";
+  const key = keys[_keyIdx % keys.length];
+  _keyIdx++;
+  return key;
+}
+
+// Simple in-memory cache — avoids hammering the 1000 req/day limit
+const srcCache = new Map<string, { data: unknown; ts: number }>();
+function fromCache(key: string, ttlMs: number): unknown | null {
+  const entry = srcCache.get(key);
+  if (entry && Date.now() - entry.ts < ttlMs) return entry.data;
+  return null;
+}
+function toCache(key: string, data: unknown) {
+  srcCache.set(key, { data, ts: Date.now() });
+}
+
+async function sportsrcFetch(params: Record<string, string>) {
+  const apiKey = getSportsrcKey();
+  if (!apiKey) throw new Error("SPORTSRC API keys not configured on server");
+  const qs = new URLSearchParams(params).toString();
+  const url = `https://api.sportsrc.org/v2/?${qs}`;
+  const r = await fetch(url, {
+    headers: { "X-API-KEY": apiKey, "Accept": "application/json" },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!r.ok) throw new Error(`SportSRC returned ${r.status}`);
+  return r.json();
+}
+
+// GET /api/sports/live?sport=football&date=YYYY-MM-DD
+router.get("/sports/live", requireAuth, async (req, res) => {
+  const sport = String(req.query.sport ?? "football");
+  const date  = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+  const cacheKey = `matches:${sport}:${date}`;
+  const cached = fromCache(cacheKey, 60_000); // 60s TTL
+  if (cached) { res.json(cached); return; }
+  try {
+    const data = await sportsrcFetch({ type: "matches", sport, date });
+    toCache(cacheKey, data);
+    res.json(data);
+  } catch (e: any) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/sports/match/:id — match detail + stream embed URL
+router.get("/sports/match/:id", requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  const cacheKey = `detail:${id}`;
+  const cached = fromCache(cacheKey, 5 * 60_000); // 5min TTL for detail
+  if (cached) { res.json(cached); return; }
+  try {
+    const data = await sportsrcFetch({ type: "detail", id });
+    toCache(cacheKey, data);
+    res.json(data);
+  } catch (e: any) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/sports/categories
+router.get("/sports/categories", requireAuth, async (_req, res) => {
+  const cached = fromCache("sports:categories", 60 * 60_000); // 1h TTL
+  if (cached) { res.json(cached); return; }
+  try {
+    const data = await sportsrcFetch({ type: "sports" });
+    toCache("sports:categories", data);
+    res.json(data);
+  } catch (e: any) { res.status(502).json({ error: e.message }); }
+});
+
 export default router;
