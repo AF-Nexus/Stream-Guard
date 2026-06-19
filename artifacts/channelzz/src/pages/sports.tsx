@@ -138,6 +138,9 @@ function MatchCard({ match, onWatch, loading }: { match: SrcMatch; onWatch: (m: 
 // ── Full-screen player overlay ─────────────────────────────────────────────────
 function SportsPlayer({ match, embedUrl, onClose }: { match: SrcMatch; embedUrl: string; onClose: () => void }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [iframeError, setIframeError] = useState(false);
+
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
       {/* Header */}
@@ -158,14 +161,44 @@ function SportsPlayer({ match, embedUrl, onClose }: { match: SrcMatch; embedUrl:
       </div>
 
       {/* Player */}
-      <div ref={wrapperRef} className="flex-1 overflow-hidden bg-black" style={{ position: "relative" }}>
+      <div ref={wrapperRef} className="flex-1 overflow-hidden bg-black flex items-center justify-center" style={{ position: "relative" }}>
+        {!iframeLoaded && !iframeError && (
+          <div className="flex flex-col items-center gap-2">
+            <RefreshCw className="h-6 w-6 animate-spin text-white/50" />
+            <p className="text-sm text-white/50">Loading stream...</p>
+          </div>
+        )}
+        
+        {iframeError && (
+          <div className="flex flex-col items-center gap-3 text-center">
+            <AlertCircle className="h-10 w-10 text-red-400" />
+            <div>
+              <p className="text-white font-medium">Stream failed to load</p>
+              <p className="text-sm text-white/50 mt-1">The stream may be unavailable or blocked</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={onClose} className="text-white border-white/30 hover:bg-white/10">
+              Close
+            </Button>
+          </div>
+        )}
+
         <iframe
           src={embedUrl}
-          style={{ position: "absolute", top: 0, left: 0, width: "calc(100% + 280px)", height: "100%", border: "none" }}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "calc(100% + 280px)",
+            height: "100%",
+            border: "none",
+            display: iframeLoaded ? "block" : "none",
+          }}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
           allowFullScreen
           referrerPolicy="no-referrer-when-downgrade"
           title={`${match.home_team} vs ${match.away_team}`}
+          onLoad={() => setIframeLoaded(true)}
+          onError={() => setIframeError(true)}
           /* No sandbox — SportSRC docs explicitly say sandbox breaks their player */
         />
       </div>
