@@ -228,6 +228,8 @@ export default function Sports() {
   const [, navigate] = useLocation();
   const { data: me, isLoading: loadingMe } = useGetMe();
 
+  console.log("Sports component mounted", { me, loadingMe });
+
   const [sport, setSport] = useState("football");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -249,13 +251,22 @@ export default function Sports() {
     setError(null);
     try {
       const date = new Date().toISOString().slice(0, 10);
-      const r = await fetch(`/api/sports/live?sport=${sport}&date=${date}`);
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      const url = `/api/sports/live?sport=${sport}&date=${date}`;
+      console.log("Fetching matches from:", url);
+      const r = await fetch(url);
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`Server error ${r.status}: ${text}`);
+      }
       const data = await r.json();
+      console.log("Matches fetched:", data);
       if (data.error) throw new Error(data.error);
       setMatches(Array.isArray(data) ? data : (data.matches ?? data.data ?? []));
     } catch (e: any) {
-      setError(e.message ?? "Failed to load matches");
+      const errorMsg = e.message ?? "Failed to load matches";
+      console.error("Fetch error:", errorMsg);
+      setError(errorMsg);
+      setMatches([]);
     } finally {
       setLoading(false);
     }
@@ -299,15 +310,18 @@ export default function Sports() {
   const liveCnt = matches.filter(isLive).length;
 
   if (loadingMe) return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+    <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: "#1a1a1a" }}>
+      <RefreshCw className="h-6 w-6 animate-spin text-white/50" />
     </div>
   );
 
-  if (!me?.authenticated) return null; // Auth redirect in progress
+  if (!me?.authenticated) {
+    console.log("Not authenticated, waiting for redirect", { me, loadingMe });
+    return <div className="w-full min-h-screen" style={{ backgroundColor: "#0a0a0a" }} />;
+  }
 
   return (
-    <div className="w-full min-h-screen bg-background">
+    <div className="w-full min-h-screen" style={{ backgroundColor: "#0a0a0a" }}>
       {player && <SportsPlayer match={player.match} embedUrl={player.embedUrl} onClose={() => setPlayer(null)} />}
 
       <div className="container mx-auto px-4 py-6 space-y-5 max-w-5xl">
