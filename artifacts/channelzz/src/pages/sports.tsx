@@ -238,7 +238,10 @@ export default function Sports() {
   const [player, setPlayer] = useState<{ match: SrcMatch; embedUrl: string } | null>(null);
 
   useEffect(() => {
-    if (!loadingMe && !me?.authenticated) navigate("/sign-in");
+    if (!loadingMe && !me?.authenticated) {
+      console.warn("Not authenticated, redirecting...");
+      navigate("/sign-in");
+    }
   }, [loadingMe, me, navigate]);
 
   const fetchMatches = useCallback(async () => {
@@ -296,13 +299,15 @@ export default function Sports() {
   const liveCnt = matches.filter(isLive).length;
 
   if (loadingMe) return (
-    <div className="flex min-h-[60vh] items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-background">
       <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
     </div>
   );
 
+  if (!me?.authenticated) return null; // Auth redirect in progress
+
   return (
-    <>
+    <div className="w-full min-h-screen bg-background">
       {player && <SportsPlayer match={player.match} embedUrl={player.embedUrl} onClose={() => setPlayer(null)} />}
 
       <div className="container mx-auto px-4 py-6 space-y-5 max-w-5xl">
@@ -406,6 +411,6 @@ export default function Sports() {
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }
