@@ -1,323 +1,266 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import {
-  Trophy, Clock, Tv, X, RefreshCw, ChevronRight,
-  Wifi, Radio, AlertCircle,
+  Trophy, Clock, X, RefreshCw, ChevronRight,
+  Radio, AlertCircle, Search, Maximize2, Tv,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type CdnChannel = {
-  channel_name: string;
-  channel_code: string;
-  viewers: string;
-  url: string;
-  image: string;
+type SrcMatch = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  home_score?: number | string;
+  away_score?: number | string;
+  home_badge?: string;
+  away_badge?: string;
+  status: string; // "inprogress" | "upcoming" | "finished" | "live"
+  time?: string;
+  league?: string;
+  country?: string;
+  country_flag?: string;
+  league_logo?: string;
+  date?: string;
+  start_time?: string;
+  has_stream?: boolean;
 };
 
-type SportEvent = {
-  gameID: string;
-  homeTeam: string;
-  awayTeam: string;
-  homeTeamIMG: string;
-  awayTeamIMG: string;
-  time: string;
-  tournament: string;
-  country: string;
-  countryIMG: string;
-  status: "live" | "upcoming" | "finished";
-  start: string;
-  end: string;
-  channels: CdnChannel[];
+type SrcDetail = {
+  id: string;
+  stream_url?: string;
+  streams?: { url: string; name?: string }[];
+  [key: string]: unknown;
 };
 
-type SportsData = {
-  Soccer?: SportEvent[];
-  NFL?: SportEvent[];
-  NBA?: SportEvent[];
-  NHL?: SportEvent[];
-  total_events?: number;
-};
-
-type PlayerState = {
-  eventName: string;
-  channelName: string;
-  channelImg: string;
-  embedUrl: string;
-  channelId: string | null;
-};
-
-// ── Sport config ──────────────────────────────────────────────────────────────
-const SPORTS = [
-  { key: "all",    label: "All Sports",  emoji: "🏆" },
-  { key: "Soccer", label: "Football",    emoji: "⚽" },
-  { key: "NFL",    label: "NFL",         emoji: "🏈" },
-  { key: "NBA",    label: "NBA",         emoji: "🏀" },
-  { key: "NHL",    label: "NHL",         emoji: "🏒" },
-] as const;
-
-const STATUS_FILTERS = ["all", "live", "upcoming", "finished"] as const;
-
-// ── Status badge ──────────────────────────────────────────────────────────────
-function StatusBadge({ status }: { status: string }) {
-  if (status === "live") return (
-    <span className="flex items-center gap-1 text-xs font-bold text-red-500">
-      <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" /> LIVE
-    </span>
-  );
-  if (status === "upcoming") return (
-    <span className="flex items-center gap-1 text-xs text-blue-400">
-      <Clock className="h-3 w-3" /> Upcoming
-    </span>
-  );
-  return <span className="text-xs text-muted-foreground">Finished</span>;
+// ── Status helpers ────────────────────────────────────────────────────────────
+function isLive(m: SrcMatch) {
+  return m.status === "inprogress" || m.status === "live" || m.status === "1H" || m.status === "2H" || m.status === "HT";
+}
+function isUpcoming(m: SrcMatch) {
+  return m.status === "upcoming" || m.status === "NS";
+}
+function isFinished(m: SrcMatch) {
+  return m.status === "finished" || m.status === "FT" || m.status === "AET" || m.status === "PEN";
 }
 
-// ── Team logo with fallback ───────────────────────────────────────────────────
-function TeamLogo({ src, alt }: { src: string; alt: string }) {
+function StatusPill({ m }: { m: SrcMatch }) {
+  if (isLive(m)) return (
+    <span className="flex items-center gap-1 text-xs font-bold text-red-500">
+      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />
+      {m.time ? `LIVE ${m.time}` : "LIVE"}
+    </span>
+  );
+  if (isFinished(m)) return (
+    <span className="text-xs text-muted-foreground font-medium">FT {m.home_score ?? 0}–{m.away_score ?? 0}</span>
+  );
+  return (
+    <span className="flex items-center gap-1 text-xs text-blue-400">
+      <Clock className="h-3 w-3" />{m.start_time ?? m.time ?? ""}
+    </span>
+  );
+}
+
+// ── Team badge ────────────────────────────────────────────────────────────────
+function TeamBadge({ src, name }: { src?: string; name: string }) {
   const [err, setErr] = useState(false);
-  if (err || !src) return (
-    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
-      {alt.slice(0, 2).toUpperCase()}
+  if (!src || err) return (
+    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">
+      {name.slice(0, 2).toUpperCase()}
     </div>
   );
-  return <img src={src} alt={alt} className="w-10 h-10 object-contain" onError={() => setErr(true)} />;
+  return <img src={src} alt={name} onError={() => setErr(true)} loading="lazy" className="w-10 h-10 object-contain shrink-0" />;
 }
 
-// ── Inline iframe player overlay ──────────────────────────────────────────────
-function SportsPlayer({ state, onClose }: { state: PlayerState; onClose: () => void }) {
-  const [, navigate] = useLocation();
-
-  const handleFullChannel = () => {
-    if (state.channelId) {
-      onClose();
-      navigate(`/watch/${state.channelId}`);
-    }
-  };
-
+// ── Match card ────────────────────────────────────────────────────────────────
+function MatchCard({ match, onWatch, loading }: { match: SrcMatch; onWatch: (m: SrcMatch) => void; loading: boolean }) {
+  const live = isLive(match);
   return (
-    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
+    <div className={`rounded-xl border bg-card overflow-hidden transition-all ${live ? "border-red-500/40 shadow-[0_0_0_1px_rgba(239,68,68,0.15)]" : "border-border"}`}>
+      <div className="p-4 space-y-3">
+        {/* League row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {match.country_flag && (
+              <img src={match.country_flag} alt="" className="w-4 h-3 object-cover rounded-sm shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            )}
+            <span className="text-xs text-muted-foreground truncate">{match.league ?? match.country ?? "Match"}</span>
+          </div>
+          <StatusPill m={match} />
+        </div>
+
+        {/* Teams */}
         <div className="flex items-center gap-3">
-          <img src={state.channelImg} alt={state.channelName}
-            className="w-8 h-8 rounded object-contain bg-black"
-            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-          <div>
-            <p className="text-sm font-semibold text-white">{state.channelName}</p>
-            <p className="text-xs text-white/60">{state.eventName}</p>
+          <div className="flex flex-col items-center gap-1 flex-1 text-center min-w-0">
+            <TeamBadge src={match.home_badge} name={match.home_team} />
+            <span className="text-xs font-medium leading-tight line-clamp-2">{match.home_team}</span>
+          </div>
+
+          <div className="flex flex-col items-center gap-0.5 shrink-0">
+            {isLive(match) || isFinished(match) ? (
+              <span className="text-2xl font-bold tracking-tight">
+                {match.home_score ?? 0}–{match.away_score ?? 0}
+              </span>
+            ) : (
+              <span className="text-lg font-bold text-muted-foreground">VS</span>
+            )}
+          </div>
+
+          <div className="flex flex-col items-center gap-1 flex-1 text-center min-w-0">
+            <TeamBadge src={match.away_badge} name={match.away_team} />
+            <span className="text-xs font-medium leading-tight line-clamp-2">{match.away_team}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {state.channelId && (
-            <Button size="sm" variant="outline" onClick={handleFullChannel} className="gap-1.5 text-xs border-white/20 text-white hover:bg-white/10">
-              <Tv className="h-3.5 w-3.5" /> Full Player
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" onClick={onClose} className="text-white hover:bg-white/10 rounded-full p-2">
+      </div>
+
+      {/* Watch button */}
+      {(live || isUpcoming(match)) && match.has_stream !== false && (
+        <button
+          onClick={() => onWatch(match)}
+          disabled={loading}
+          className="w-full flex items-center justify-between px-4 py-2.5 border-t border-border bg-card hover:bg-muted/50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            {live ? <Radio className="h-3.5 w-3.5 text-red-500 animate-pulse" /> : <Tv className="h-3.5 w-3.5 text-muted-foreground" />}
+            <span className="text-sm font-medium">{live ? "Watch Live" : "Stream"}</span>
+          </div>
+          {loading ? <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Full-screen player overlay ─────────────────────────────────────────────────
+function SportsPlayer({ match, embedUrl, onClose }: { match: SrcMatch; embedUrl: string; onClose: () => void }) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0 bg-black">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-white truncate">{match.home_team} vs {match.away_team}</p>
+          <p className="text-xs text-white/50">{match.league}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => wrapperRef.current?.requestFullscreen?.()}
+            className="text-white/70 hover:text-white p-2 rounded-full hover:bg-white/10">
+            <Maximize2 className="h-4 w-4" />
+          </button>
+          <button onClick={onClose} className="text-white/70 hover:text-white p-2 rounded-full hover:bg-white/10">
             <X className="h-5 w-5" />
-          </Button>
+          </button>
         </div>
       </div>
 
       {/* Player */}
-      <div className="flex-1 relative overflow-hidden">
-        {state.channelId ? (
-          /* Routed through full player page in iframe */
-          <iframe
-            src={`/watch/${state.channelId}`}
-            className="w-full h-full border-0"
-            allow="autoplay; fullscreen"
-            title={state.channelName}
-          />
-        ) : (
-          /* CDN embed URL directly */
-          <div className="relative w-full h-full">
-            <iframe
-              src={state.embedUrl}
-              className="w-full h-full border-0"
-              allow="autoplay; fullscreen; encrypted-media"
-              referrerPolicy="no-referrer-when-downgrade"
-              title={state.channelName}
-            />
-            {/* Click blocker — stops ads */}
-            <div className="absolute inset-0 z-10" onContextMenu={e => e.preventDefault()} />
-          </div>
-        )}
+      <div ref={wrapperRef} className="flex-1 overflow-hidden bg-black" style={{ position: "relative" }}>
+        <iframe
+          src={embedUrl}
+          style={{ position: "absolute", top: 0, left: 0, width: "calc(100% + 280px)", height: "100%", border: "none" }}
+          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+          allowFullScreen
+          referrerPolicy="no-referrer-when-downgrade"
+          title={`${match.home_team} vs ${match.away_team}`}
+          /* No sandbox — SportSRC docs explicitly say sandbox breaks their player */
+        />
       </div>
     </div>
   );
 }
 
-// ── Event card ────────────────────────────────────────────────────────────────
-function EventCard({
-  event, sport, onWatch,
-}: {
-  event: SportEvent;
-  sport: string;
-  onWatch: (event: SportEvent, channel: CdnChannel) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
+// ── Sports categories ─────────────────────────────────────────────────────────
+const DEFAULT_SPORTS = [
+  { id: "football",   label: "Football",    emoji: "⚽" },
+  { id: "basketball", label: "Basketball",  emoji: "🏀" },
+  { id: "cricket",    label: "Cricket",     emoji: "🏏" },
+  { id: "mma",        label: "MMA / UFC",   emoji: "🥊" },
+  { id: "tennis",     label: "Tennis",      emoji: "🎾" },
+  { id: "rugby",      label: "Rugby",       emoji: "🏉" },
+];
 
-  return (
-    <div className={`rounded-xl border bg-card overflow-hidden transition-all ${event.status === "live" ? "border-red-500/40 shadow-[0_0_0_1px_rgba(239,68,68,0.2)]" : "border-border"}`}>
-      {/* Match header */}
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <img src={event.countryIMG} alt={event.country}
-              className="w-5 h-3.5 object-cover rounded-sm"
-              onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-            <span className="text-xs text-muted-foreground">{event.tournament}</span>
-          </div>
-          <StatusBadge status={event.status} />
-        </div>
+const STATUS_FILTERS = [
+  { id: "all",      label: "All" },
+  { id: "live",     label: "Live" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "finished", label: "Finished" },
+];
 
-        {/* Teams */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex flex-col items-center gap-1.5 flex-1 text-center">
-            <TeamLogo src={event.homeTeamIMG} alt={event.homeTeam} />
-            <span className="text-sm font-medium leading-tight">{event.homeTeam}</span>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            <span className="text-xl font-bold text-muted-foreground">VS</span>
-            <span className="text-xs text-muted-foreground">{event.time}</span>
-          </div>
-          <div className="flex flex-col items-center gap-1.5 flex-1 text-center">
-            <TeamLogo src={event.awayTeamIMG} alt={event.awayTeam} />
-            <span className="text-sm font-medium leading-tight">{event.awayTeam}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Channels */}
-      {event.channels.length > 0 && event.status !== "finished" && (
-        <div className="border-t border-border">
-          {/* Show first channel always, rest on expand */}
-          {(expanded ? event.channels : event.channels.slice(0, 1)).map((ch, i) => (
-            <button
-              key={i}
-              onClick={() => onWatch(event, ch)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50 transition-colors text-left border-b border-border/50 last:border-0"
-            >
-              <img src={ch.image} alt={ch.channel_name}
-                className="w-7 h-7 rounded object-contain bg-black shrink-0"
-                onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{ch.channel_name}</p>
-                <p className="text-xs text-muted-foreground uppercase">{ch.channel_code}</p>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {event.status === "live" && <Radio className="h-3.5 w-3.5 text-red-500" />}
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              </div>
-            </button>
-          ))}
-          {event.channels.length > 1 && (
-            <button
-              onClick={() => setExpanded(p => !p)}
-              className="w-full px-4 py-2 text-xs text-primary hover:bg-muted/30 transition-colors text-center"
-            >
-              {expanded ? "Show less" : `+${event.channels.length - 1} more channel${event.channels.length > 2 ? "s" : ""}`}
-            </button>
-          )}
-        </div>
-      )}
-      {event.status === "finished" && (
-        <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground text-center">Match ended</div>
-      )}
-    </div>
-  );
-}
-
-// ── Main Sports page ──────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function Sports() {
   const [, navigate] = useLocation();
   const { data: me, isLoading: loadingMe } = useGetMe();
 
-  const [data, setData] = useState<SportsData | null>(null);
+  const [sport, setSport] = useState("football");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [matches, setMatches] = useState<SrcMatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sport, setSport] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [player, setPlayer] = useState<PlayerState | null>(null);
-  const [resolving, setResolving] = useState<string | null>(null);
+  const [fetchingId, setFetchingId] = useState<string | null>(null);
+  const [player, setPlayer] = useState<{ match: SrcMatch; embedUrl: string } | null>(null);
 
-  // Redirect if not authenticated
   useEffect(() => {
     if (!loadingMe && !me?.authenticated) navigate("/sign-in");
   }, [loadingMe, me, navigate]);
 
-  const fetchEvents = useCallback(async () => {
+  const fetchMatches = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/sports");
-      if (!r.ok) throw new Error(`Error ${r.status}`);
-      const json = await r.json() as { "cdnlivetv.tv": SportsData };
-      setData(json["cdnlivetv.tv"] ?? json);
+      const date = new Date().toISOString().slice(0, 10);
+      const r = await fetch(`/api/sports/live?sport=${sport}&date=${date}`);
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      setMatches(Array.isArray(data) ? data : (data.matches ?? data.data ?? []));
     } catch (e: any) {
-      setError(e.message ?? "Failed to load events");
+      setError(e.message ?? "Failed to load matches");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sport]);
 
-  useEffect(() => { if (me?.authenticated) fetchEvents(); }, [me, fetchEvents]);
+  // Initial fetch + re-fetch when sport changes
+  useEffect(() => { if (me?.authenticated) fetchMatches(); }, [me?.authenticated, fetchMatches]);
 
-  // Auto-refresh every 2 minutes
+  // Auto-refresh every 60s
   useEffect(() => {
-    const t = setInterval(() => { if (me?.authenticated) fetchEvents(); }, 2 * 60 * 1000);
+    const t = setInterval(() => { if (me?.authenticated) fetchMatches(); }, 60_000);
     return () => clearInterval(t);
-  }, [me, fetchEvents]);
+  }, [me?.authenticated, fetchMatches]);
 
-  const handleWatch = async (event: SportEvent, channel: CdnChannel) => {
-    setResolving(channel.channel_name);
+  const handleWatch = async (match: SrcMatch) => {
+    setFetchingId(match.id);
     try {
-      const r = await fetch(`/api/sports/resolve?name=${encodeURIComponent(channel.channel_name.toLowerCase())}`);
-      const d = await r.json() as { channelId: string | null };
-      setPlayer({
-        eventName: `${event.homeTeam} vs ${event.awayTeam}`,
-        channelName: channel.channel_name,
-        channelImg: channel.image,
-        embedUrl: channel.url,
-        channelId: d.channelId,
-      });
+      const r = await fetch(`/api/sports/match/${match.id}`);
+      const detail: SrcDetail = await r.json();
+      const embedUrl = detail.stream_url ?? detail.streams?.[0]?.url ?? "";
+      if (!embedUrl) { alert("No stream available for this match yet."); return; }
+      setPlayer({ match, embedUrl });
     } catch {
-      setPlayer({
-        eventName: `${event.homeTeam} vs ${event.awayTeam}`,
-        channelName: channel.channel_name,
-        channelImg: channel.image,
-        embedUrl: channel.url,
-        channelId: null,
-      });
+      alert("Could not load stream. Try again in a moment.");
     } finally {
-      setResolving(null);
+      setFetchingId(null);
     }
   };
 
-  // Build event list from selected sport/status
-  const allEvents = (() => {
-    if (!data) return [];
-    const keys: (keyof SportsData)[] = sport === "all"
-      ? ["Soccer", "NFL", "NBA", "NHL"]
-      : [sport as keyof SportsData];
-    return keys.flatMap(k => {
-      const arr = data[k];
-      return Array.isArray(arr)
-        ? arr.map(e => ({ ...e, _sport: k }))
-        : [];
-    });
-  })();
+  // Filter
+  const filtered = matches.filter(m => {
+    if (statusFilter === "live"     && !isLive(m))     return false;
+    if (statusFilter === "upcoming" && !isUpcoming(m)) return false;
+    if (statusFilter === "finished" && !isFinished(m)) return false;
+    if (search && !m.home_team.toLowerCase().includes(search.toLowerCase()) &&
+        !m.away_team.toLowerCase().includes(search.toLowerCase()) &&
+        !(m.league ?? "").toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
 
-  const filtered = allEvents.filter(e =>
-    statusFilter === "all" || e.status === statusFilter
-  );
-
-  const liveCnt = allEvents.filter(e => e.status === "live").length;
+  const liveCnt = matches.filter(isLive).length;
 
   if (loadingMe) return (
     <div className="flex min-h-[60vh] items-center justify-center">
@@ -327,71 +270,79 @@ export default function Sports() {
 
   return (
     <>
-      {player && <SportsPlayer state={player} onClose={() => setPlayer(null)} />}
+      {player && <SportsPlayer match={player.match} embedUrl={player.embedUrl} onClose={() => setPlayer(null)} />}
 
-      <div className="container mx-auto px-4 py-6 space-y-6 max-w-5xl">
-        {/* Page header */}
+      <div className="container mx-auto px-4 py-6 space-y-5 max-w-5xl">
+        {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <Trophy className="h-6 w-6 text-primary" /> Sports
-              {liveCnt > 0 && (
-                <Badge variant="destructive" className="ml-2 text-xs animate-pulse">{liveCnt} LIVE</Badge>
-              )}
+              {liveCnt > 0 && <Badge variant="destructive" className="text-xs animate-pulse">{liveCnt} LIVE</Badge>}
             </h1>
-            <p className="text-muted-foreground text-sm mt-0.5">Live &amp; upcoming events from CDN Live TV</p>
+            <p className="text-sm text-muted-foreground mt-0.5">Live matches · auto-refreshes every 60s</p>
           </div>
-          <Button variant="outline" size="sm" onClick={fetchEvents} disabled={loading} className="gap-2">
+          <Button variant="outline" size="sm" onClick={fetchMatches} disabled={loading} className="gap-2">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>
 
-        {/* Sport filter */}
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-          {SPORTS.map(s => (
-            <button key={s.key} onClick={() => setSport(s.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors shrink-0 ${sport === s.key ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}>
+        {/* Sport tabs */}
+        <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+          {DEFAULT_SPORTS.map(s => (
+            <button key={s.id} onClick={() => setSport(s.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${sport === s.id ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}>
               <span>{s.emoji}</span>{s.label}
             </button>
           ))}
         </div>
 
-        {/* Status filter */}
-        <div className="flex gap-2 flex-wrap">
-          {STATUS_FILTERS.map(f => (
-            <button key={f} onClick={() => setStatusFilter(f)}
-              className={`px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${statusFilter === f ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/70 text-muted-foreground"}`}>
-              {f === "all" ? "All Statuses" : f}
-              {f === "live" && liveCnt > 0 && <span className="ml-1.5 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{liveCnt}</span>}
-            </button>
-          ))}
+        {/* Search + status filter */}
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="relative flex-1 min-w-[160px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input placeholder="Search teams or league…" className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {STATUS_FILTERS.map(f => (
+              <button key={f.id} onClick={() => setStatusFilter(f.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${statusFilter === f.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/70"}`}>
+                {f.label}
+                {f.id === "live" && liveCnt > 0 && (
+                  <span className="ml-1.5 bg-red-500 text-white text-[10px] px-1 rounded-full">{liveCnt}</span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Error */}
         {error && (
-          <div className="flex items-center gap-3 p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive">
             <AlertCircle className="h-5 w-5 shrink-0" />
-            <div>
-              <p className="font-medium">Failed to load events</p>
-              <p className="text-sm opacity-80">{error}</p>
+            <div className="flex-1">
+              <p className="font-medium text-sm">{error}</p>
+              {error.includes("not configured") && (
+                <p className="text-xs mt-1 opacity-80">Add SPORTSRC_KEY_1 and SPORTSRC_KEY_2 to your Render environment variables.</p>
+              )}
             </div>
-            <Button size="sm" variant="outline" onClick={fetchEvents} className="ml-auto border-destructive/30">Retry</Button>
+            <Button size="sm" variant="outline" onClick={fetchMatches} className="border-destructive/30 shrink-0">Retry</Button>
           </div>
         )}
 
         {/* Loading skeletons */}
-        {loading && !data && (
+        {loading && matches.length === 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {Array.from({ length: 9 }).map((_, i) => (
               <div key={i} className="rounded-xl border border-border p-4 space-y-3">
-                <Skeleton className="h-4 w-24" />
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col items-center gap-2">
+                <Skeleton className="h-3 w-28" />
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col items-center gap-2 flex-1">
                     <Skeleton className="w-10 h-10 rounded-full" />
                     <Skeleton className="h-3 w-20" />
                   </div>
-                  <Skeleton className="h-6 w-8" />
-                  <div className="flex flex-col items-center gap-2">
+                  <Skeleton className="h-6 w-10" />
+                  <div className="flex flex-col items-center gap-2 flex-1">
                     <Skeleton className="w-10 h-10 rounded-full" />
                     <Skeleton className="h-3 w-20" />
                   </div>
@@ -401,32 +352,23 @@ export default function Sports() {
           </div>
         )}
 
-        {/* Events grid */}
-        {!loading && filtered.length > 0 && (
+        {/* Matches grid */}
+        {filtered.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map(event => (
-              <div key={event.gameID} className="relative">
-                {resolving === event.channels[0]?.channel_name && (
-                  <div className="absolute inset-0 z-10 bg-background/60 rounded-xl flex items-center justify-center">
-                    <RefreshCw className="h-5 w-5 animate-spin text-primary" />
-                  </div>
-                )}
-                <EventCard event={event} sport={(event as any)._sport} onWatch={handleWatch} />
-              </div>
+            {filtered.map(m => (
+              <MatchCard key={m.id} match={m} onWatch={handleWatch} loading={fetchingId === m.id} />
             ))}
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && !error && filtered.length === 0 && data && (
-          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-            <Wifi className="h-10 w-10 text-muted-foreground/50" />
-            <p className="text-muted-foreground font-medium">No events found</p>
-            <p className="text-sm text-muted-foreground/70">
-              {statusFilter !== "all" ? `No ${statusFilter} events right now.` : "No events available."}
-            </p>
+        {/* Empty */}
+        {!loading && !error && filtered.length === 0 && (
+          <div className="py-20 text-center space-y-3">
+            <Trophy className="h-10 w-10 mx-auto text-muted-foreground/30" />
+            <p className="text-muted-foreground font-medium">No {statusFilter !== "all" ? statusFilter : ""} {sport} matches today</p>
+            <p className="text-sm text-muted-foreground/60">Try a different sport or check back later</p>
             {statusFilter !== "all" && (
-              <Button variant="outline" size="sm" onClick={() => setStatusFilter("all")}>Show all events</Button>
+              <Button variant="outline" size="sm" onClick={() => setStatusFilter("all")}>Show all</Button>
             )}
           </div>
         )}
